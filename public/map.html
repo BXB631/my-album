@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#000000">
+  <title>照片地图 · 我的相册</title>
+
+  <link rel="stylesheet" href="/vendor/leaflet/leaflet.css">
+  <link rel="stylesheet" href="/vendor/leaflet-markercluster/MarkerCluster.css">
+  <link rel="stylesheet" href="/vendor/leaflet-markercluster/MarkerCluster.Default.css">
+  <link rel="stylesheet" href="/styles.css">
+  <link rel="stylesheet" href="/map.css">
+</head>
+<body class="map-page">
+  <header class="topbar map-topbar">
+    <div class="topbar-inner">
+      <a class="brand" href="/" aria-label="返回我的相册">
+        <span class="brand-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none">
+            <path d="M12 21s6.5-5.35 6.5-11a6.5 6.5 0 1 0-13 0C5.5 15.65 12 21 12 21Z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/>
+            <circle cx="12" cy="10" r="2.25" stroke="currentColor" stroke-width="1.6"/>
+          </svg>
+        </span>
+        <span>照片地图</span>
+      </a>
+
+      <div class="topbar-actions">
+        <a class="topbar-pill" href="/">图库</a>
+      </div>
+    </div>
+  </header>
+
+  <main class="map-shell">
+    <div id="map" aria-label="带位置信息的照片地图"></div>
+
+    <div class="map-summary" aria-live="polite">
+      <span class="map-status-dot" aria-hidden="true"></span>
+      <span id="mapSummaryText">正在读取位置信息…</span>
+    </div>
+
+    <button class="map-fit" id="mapFit" type="button" aria-label="显示全部位置" title="显示全部位置" hidden>
+      <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <path d="M9 4H4v5M15 4h5v5M9 20H4v-5M15 20h5v-5" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+    </button>
+
+    <div class="map-empty" id="mapEmpty" hidden>
+      <div class="map-empty-icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none">
+          <path d="M12 21s6.5-5.35 6.5-11a6.5 6.5 0 1 0-13 0C5.5 15.65 12 21 12 21Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
+          <circle cx="12" cy="10" r="2.2" stroke="currentColor" stroke-width="1.5"/>
+        </svg>
+      </div>
+      <h1>还没有位置信息</h1>
+      <p>只有带 GPS 信息的照片才会出现在地图上。<br>iPhone 照片通常会自动记录拍摄地点。</p>
+      <a class="state-button" href="/">返回图库</a>
+    </div>
+
+    <aside class="map-preview" id="mapPreview" aria-live="polite" hidden>
+      <button class="map-preview-close" id="mapPreviewClose" type="button" aria-label="关闭位置卡片" title="关闭">
+        <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <path d="M6.5 6.5l11 11M17.5 6.5l-11 11" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+        </svg>
+      </button>
+
+      <img class="map-preview-thumb" id="mapPreviewThumb" alt="">
+
+      <div class="map-preview-info">
+        <p class="map-preview-kicker" id="mapPreviewKicker"></p>
+        <h2 id="mapPreviewName"></h2>
+        <p class="map-preview-meta" id="mapPreviewMeta"></p>
+      </div>
+
+      <a class="map-preview-open" id="mapPreviewOpen" href="/">查看照片</a>
+    </aside>
+  </main>
+
+  <script src="/vendor/leaflet/leaflet.js" defer></script>
+  <script src="/vendor/leaflet-markercluster/leaflet.markercluster.js" defer></script>
+  <script src="/map.js" defer></script>
+</body>
+</html>

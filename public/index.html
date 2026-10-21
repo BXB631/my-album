@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#000000">
+  <title>我的相册</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <a class="brand" href="/" aria-label="我的相册首页">
+        <span class="brand-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none">
+            <rect x="3.25" y="5.25" width="17.5" height="13.5" rx="3.25" stroke="currentColor" stroke-width="1.5"/>
+            <circle cx="8.4" cy="10" r="1.45" fill="currentColor"/>
+            <path d="M4.8 16.2l4.1-4.05a1.35 1.35 0 0 1 1.9 0l2.2 2.18 1.55-1.53a1.35 1.35 0 0 1 1.9 0l2.75 2.72" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </span>
+        <span>我的相册</span>
+      </a>
+
+      <div class="topbar-actions">
+        <div class="topbar-open-mode" role="group" aria-label="图片打开方式">
+          <button type="button" class="is-active" data-open-mode="viewer" aria-pressed="true" title="在相册内浏览，可左右翻页">相册</button>
+          <button type="button" data-open-mode="external" aria-pressed="false" title="用系统照片打开原图">系统</button>
+        </div>
+
+        <button class="icon-button" id="topbarFolderButton" type="button" aria-label="选择照片文件夹" title="选择照片文件夹">
+          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M3.6 7.5a2 2 0 0 1 2-2h3.2l1.8 2.1h7.8a2 2 0 0 1 2 2v7.3a2 2 0 0 1-2 2h-12.8a2 2 0 0 1-2-2V7.5Z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/>
+            <path d="M4.2 9.6h15.4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+          </svg>
+        </button>
+
+        <a class="icon-button" href="/map.html" aria-label="打开照片地图" title="照片地图">
+          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M12 21s6.5-5.35 6.5-11a6.5 6.5 0 1 0-13 0C5.5 15.65 12 21 12 21Z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/>
+            <circle cx="12" cy="10" r="2.25" stroke="currentColor" stroke-width="1.7"/>
+          </svg>
+        </a>
+
+        <button class="icon-button" id="refreshButton" type="button" aria-label="刷新相册" title="刷新相册">
+          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M20 11a8 8 0 1 0-.55 4.2" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
+            <path d="M20 5.5V11h-5.5" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <main class="app">
+    <header class="page-header">
+      <p class="eyebrow">我的时间轴</p>
+      <h1>图库</h1>
+      <p class="summary" id="summary">正在读取照片文件夹…</p>
+    </header>
+
+    <section class="source-panel" aria-labelledby="sourceTitle">
+      <div class="source-icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none">
+          <path d="M3.6 7.5a2 2 0 0 1 2-2h3.2l1.8 2.1h7.8a2 2 0 0 1 2 2v7.3a2 2 0 0 1-2 2h-12.8a2 2 0 0 1-2-2V7.5Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
+          <path d="M4.2 9.6h15.4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+        </svg>
+      </div>
+
+      <div class="source-text">
+        <p class="source-kicker" id="sourceTitle">照片文件夹</p>
+        <p class="source-name" id="sourceName">正在读取…</p>
+        <p class="source-path" id="sourcePath"></p>
+        <p class="source-meta" id="sourceMeta">只在本机读取，不会上传</p>
+      </div>
+
+      <div class="source-actions">
+        <button class="source-button" id="chooseFolderButton" type="button">选择照片文件夹</button>
+
+        <button class="cache-button" id="clearCacheButton" type="button" title="清除缩略图、预览图和视频缓存">
+          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M4.5 7.25h15M9.25 7.25V5.5h5.5v1.75M7.2 7.25l.8 11.1a1.5 1.5 0 0 0 1.5 1.4h5a1.5 1.5 0 0 0 1.5-1.4l.8-11.1" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+            <path d="M10.2 10.8v5.4M13.8 10.8v5.4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+          </svg>
+          <span>清除缓存</span>
+          <span class="cache-size" id="cacheSize">—</span>
+        </button>
+      </div>
+    </section>
+
+    <div class="library-layout">
+      <aside class="folder-sidebar" id="folderSidebar" aria-label="照片年月目录">
+        <div class="sidebar-heading">
+          <span>照片目录</span>
+          <span class="sidebar-count" id="sidebarCount"></span>
+        </div>
+        <nav class="folder-list" id="folderList"></nav>
+      </aside>
+
+      <div class="library-content">
+        <div class="gallery-toolbar">
+          <div class="mobile-folder-filter">
+            <label for="folderSelect">照片目录</label>
+            <select id="folderSelect"></select>
+          </div>
+        </div>
+
+        <section id="gallery" class="gallery" aria-live="polite" aria-busy="true"></section>
+      </div>
+    </div>
+
+    <footer class="footer">
+      <span id="footerSource">照片保存在本地文件夹</span>
+      <span>桌面应用 · 本地读取</span>
+    </footer>
+  </main>
+
+  <div class="scan-overlay" id="scanOverlay" hidden>
+    <span class="ios-spinner" aria-hidden="true"></span>
+    <p id="scanText" role="status" aria-live="polite">正在扫描照片文件夹…</p>
+    <button class="scan-cancel" id="scanCancelButton" type="button">停止加载</button>
+  </div>
+
+  <div class="confirm-backdrop" id="cacheConfirm" hidden>
+    <section class="confirm-card" role="dialog" aria-modal="true" aria-labelledby="cacheConfirmTitle" tabindex="-1">
+      <div class="confirm-icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none">
+          <path d="M4.5 7.25h15M9.25 7.25V5.5h5.5v1.75M7.2 7.25l.8 11.1a1.5 1.5 0 0 0 1.5 1.4h5a1.5 1.5 0 0 0 1.5-1.4l.8-11.1" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+          <path d="M10.2 10.8v5.4M13.8 10.8v5.4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+        </svg>
+      </div>
+
+      <p class="confirm-kicker">存储空间</p>
+      <h2 id="cacheConfirmTitle">清除缓存？</h2>
+      <p class="confirm-text">
+        将删除缩略图、预览图和视频转码缓存，不会删除原始照片。<br>
+        下次打开照片时会重新生成。
+      </p>
+      <p class="confirm-size" id="cacheConfirmSize"></p>
+
+      <div class="confirm-actions">
+        <button class="confirm-cancel" id="cacheCancelButton" type="button">取消</button>
+        <button class="confirm-danger" id="cacheConfirmButton" type="button">清除缓存</button>
+      </div>
+    </section>
+  </div>
+
+  <div class="viewer" id="viewer" role="dialog" aria-modal="true" aria-label="照片预览" aria-hidden="true" tabindex="-1">
+    <div class="viewer-topbar">
+      <button class="viewer-control" id="viewerClose" type="button" aria-label="关闭预览" title="关闭（Esc）">
+        <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <path d="M6.5 6.5l11 11M17.5 6.5l-11 11" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+        </svg>
+      </button>
+
+      <div class="viewer-counter" id="viewerCounter">1 / 4</div>
+
+      <button class="viewer-control viewer-details-button" id="viewerDetailsButton" type="button" aria-label="查看详情" aria-controls="viewerDetails" aria-expanded="false" title="详情">
+        <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <circle cx="12" cy="12" r="8.5" stroke="currentColor" stroke-width="1.6"/>
+          <path d="M12 10.8v5.2" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+          <circle cx="12" cy="8.1" r="1.05" fill="currentColor"/>
+        </svg>
+        <span>详情</span>
+      </button>
+    </div>
+
+    <button class="viewer-nav viewer-nav-prev" id="viewerPrev" type="button" aria-label="上一张" title="上一张（←）">
+      <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <path d="M14.5 5.5L8 12l6.5 6.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+    </button>
+
+    <button class="viewer-nav viewer-nav-next" id="viewerNext" type="button" aria-label="下一张" title="下一张（→）">
+      <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <path d="M9.5 5.5L16 12l-6.5 6.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+    </button>
+
+    <div class="viewer-stage" id="viewerStage">
+      <div class="viewer-media" id="viewerMedia"></div>
+      <div class="viewer-spinner" id="viewerSpinner" hidden aria-live="polite">
+        <span aria-hidden="true"></span>
+        <p id="viewerSpinnerText">正在加载…</p>
+      </div>
+    </div>
+
+    <div class="viewer-footer">
+      <div class="viewer-info">
+        <div class="viewer-filename" id="viewerFilename"></div>
+        <div class="viewer-date" id="viewerDate"></div>
+      </div>
+      <div class="viewer-footer-actions">
+        <button class="viewer-open-original" id="viewerOpenOriginal" type="button" title="用系统应用打开原文件">原图</button>
+        <button class="viewer-zoom" id="viewerZoom" type="button" title="恢复 100%" hidden>100%</button>
+      </div>
+    </div>
+
+    <div class="details-backdrop" id="detailsBackdrop" hidden></div>
+
+    <section class="viewer-details" id="viewerDetails" role="region" aria-label="文件详情" tabindex="-1" hidden>
+      <div class="details-grabber" aria-hidden="true"></div>
+
+      <header class="details-header">
+        <div class="details-heading">
+          <p class="details-subtitle" id="detailsSubtitle"></p>
+          <h2>详情</h2>
+        </div>
+
+        <button class="details-close" id="detailsClose" type="button" aria-label="关闭详情" title="关闭详情">
+          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M6.5 6.5l11 11M17.5 6.5l-11 11" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+          </svg>
+        </button>
+      </header>
+
+      <div class="details-scroll" id="detailsContent"></div>
+
+      <p class="details-note">信息来自本地文件，不会上传。</p>
+    </section>
+
+    <div class="viewer-hint" id="viewerHint">
+      <span class="hint-desktop" id="viewerHintDesktop">滚轮缩放 · 双击放大 · ← → 切换 · Esc 关闭</span>
+      <span class="hint-touch" id="viewerHintTouch">双击放大 · 左右滑动切换</span>
+    </div>
+  </div>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+  <script src="/app.js" defer></script>
+</body>
+</html>

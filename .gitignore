@@ -1,0 +1,29 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Local application data and caches
+data/
+cache/
+release/
+dist/
+
+# User media (keep the folder itself)
+photos/*
+!photos/.gitkeep
+
+# Test and build artifacts
+test-runtime/
+.test-*/
+*.log
+debug.log
+electron-v*.zip
+*.blockmap
+*.7z
+
+# Editors and operating systems
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
