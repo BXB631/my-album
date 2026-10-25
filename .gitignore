@@ -14,11 +14,13 @@ photos/*
 
 # Test and build artifacts
 test-runtime/
+build/
+成品/
+release/
+.signing/
 .test-*/
 *.log
 debug.log
-electron-v*.zip
-*.blockmap
 *.7z
 
 # Editors and operating systems

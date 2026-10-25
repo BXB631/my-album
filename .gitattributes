@@ -8,6 +8,15 @@
 *.png binary
 *.jpg binary
 *.jpeg binary
+*.heic binary
+*.heif binary
+*.mov binary
+*.mp4 binary
 *.exe binary
 *.dll binary
 *.node binary
+*.zip binary
+*.pfx binary
+
+# 锁文件不参与 diff 统计
+pnpm-lock.yaml -diff

@@ -36,3 +36,19 @@ jobs:
 
       - name: Check syntax
         run: pnpm check
+
+      - name: Geometry unit test
+        run: pnpm test:geometry
+
+      - name: Streaming smoke test
+        run: pnpm test:stream
+
+      - name: Sidebar folder tree test
+        run: pnpm test:nav
+
+      # 实况照片测试用的素材在仓库外（工作区 testmedia\），CI 上没有时脚本会自己跳过。
+      - name: Live photo test
+        run: pnpm test:live
+
+      - name: Cache clearing test
+        run: pnpm test:cache

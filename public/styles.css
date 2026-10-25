@@ -21,6 +21,9 @@
 
 html {
   min-height: 100%;
+  /* 始终保留滚动条：否则内容高度变化时滚动条一进一出，
+     可用宽度跟着变，流式布局会来回重算并跳动 */
+  overflow-y: scroll;
   background: var(--background);
 }
 
@@ -168,6 +171,48 @@ a:focus-visible {
 .topbar-open-mode button:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
+}
+
+/* 视频优先直出开关：和"相册/系统"并排的小胶囊 */
+.topbar-toggle {
+  flex: none;
+  height: 26px;
+  padding: 0 10px;
+  color: rgba(235, 235, 245, 0.5);
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.045);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    color 160ms ease,
+    background 160ms ease,
+    border-color 160ms ease;
+}
+
+.topbar-toggle:hover {
+  color: rgba(245, 245, 247, 0.88);
+  background: rgba(255, 255, 255, 0.09);
+}
+
+.topbar-toggle.is-active {
+  color: #ffffff;
+  border-color: rgba(10, 132, 255, 0.4);
+  background: rgba(10, 132, 255, 0.22);
+}
+
+.topbar-toggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+@media (max-width: 620px) {
+  .topbar-toggle {
+    display: none;
+  }
 }
 
 .icon-button {
@@ -446,7 +491,7 @@ h1 {
 }
 
 .confirm-card {
-  width: min(360px, calc(100vw - 32px));
+  width: min(430px, calc(100vw - 32px));
   padding: 25px 22px 20px;
   text-align: center;
   border: 1px solid rgba(255, 255, 255, 0.11);
@@ -513,11 +558,89 @@ h1 {
   font-variant-numeric: tabular-nums;
 }
 
+/* 三档缓存：每档一个按钮，各自显示占用 */
+.cache-options {
+  display: grid;
+  gap: 8px;
+  margin-top: 16px;
+  text-align: left;
+}
+
+.cache-option {
+  display: grid;
+  gap: 4px;
+  width: 100%;
+  padding: 11px 13px;
+  color: rgba(245, 245, 247, 0.92);
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  border-radius: 15px;
+  background: rgba(255, 255, 255, 0.055);
+  cursor: pointer;
+  text-align: left;
+  transition:
+    background 160ms ease,
+    border-color 160ms ease,
+    transform 160ms ease;
+}
+
+.cache-option:hover:not(:disabled) {
+  border-color: rgba(10, 132, 255, 0.36);
+  background: rgba(10, 132, 255, 0.16);
+}
+
+.cache-option:active:not(:disabled) {
+  transform: scale(0.985);
+}
+
+.cache-option:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
+.cache-option.is-danger:hover:not(:disabled) {
+  border-color: rgba(255, 105, 105, 0.4);
+  background: rgba(255, 69, 58, 0.18);
+}
+
+.cache-option.is-clearing {
+  opacity: 0.65;
+  cursor: progress;
+}
+
+.cache-option-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.cache-option-name {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.cache-option-size {
+  flex: none;
+  color: rgba(108, 185, 255, 0.92);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.cache-option.is-danger .cache-option-size {
+  color: rgba(255, 159, 159, 0.92);
+}
+
+.cache-option-hint {
+  color: rgba(235, 235, 245, 0.42);
+  font-size: 10.5px;
+  line-height: 1.55;
+}
+
 .confirm-actions {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: 1fr;
   gap: 8px;
-  margin-top: 20px;
+  margin-top: 16px;
 }
 
 .confirm-cancel,
@@ -750,66 +873,109 @@ body.cache-confirm-open {
   box-shadow: 0 0 0 3px rgba(10, 132, 255, 0.16);
 }
 
-.scan-overlay {
-  position: fixed;
-  inset: 0;
-  z-index: 90;
+/* 扫描进度：贴在内容区顶部的细条，不再用全屏遮罩挡住照片 */
+.scan-bar {
+  position: sticky;
+  top: 62px;
+  z-index: 12;
   display: flex;
-  flex-direction: column;
   align-items: center;
-  justify-content: center;
-  gap: 16px;
-  background: rgba(0, 0, 0, 0.64);
-  -webkit-backdrop-filter: blur(14px) saturate(120%);
-  backdrop-filter: blur(14px) saturate(120%);
+  gap: 12px;
+  margin: 0 0 10px;
+  padding: 9px 14px;
+  color: rgba(235, 235, 245, 0.78);
+  border: 1px solid rgba(255, 255, 255, 0.075);
+  border-radius: 14px;
+  background: rgba(20, 20, 22, 0.88);
+  -webkit-backdrop-filter: blur(18px) saturate(130%);
+  backdrop-filter: blur(18px) saturate(130%);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.32);
 }
 
-.ios-spinner {
-  width: 34px;
-  height: 34px;
-  border: 2.5px solid rgba(255, 255, 255, 0.15);
-  border-top-color: rgba(255, 255, 255, 0.9);
+.scan-bar[hidden] {
+  display: none;
+}
+
+.scan-pulse {
+  flex: none;
+  width: 9px;
+  height: 9px;
   border-radius: 50%;
-  animation: spin 760ms linear infinite;
+  background: #0a84ff;
+  animation: scan-pulse 1.5s ease-out infinite;
 }
 
-.scan-overlay p {
+.scan-bar p {
+  flex: 1 1 auto;
+  min-width: 0;
   margin: 0;
-  color: rgba(235, 235, 245, 0.62);
-  font-size: 12px;
-  letter-spacing: 0.03em;
+  overflow: hidden;
+  font-size: 12.5px;
+  letter-spacing: 0.02em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.scan-cancel {
-  min-height: 36px;
-  margin-top: 2px;
-  padding: 0 17px;
-  color: rgba(245, 245, 247, 0.82);
-  border: 1px solid rgba(255, 255, 255, 0.12);
+.scan-track {
+  flex: none;
+  width: 120px;
+  height: 4px;
+  overflow: hidden;
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.075);
+  background: rgba(255, 255, 255, 0.13);
+}
+
+.scan-fill {
+  display: block;
+  width: 0;
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #0a84ff, #64d2ff);
+  transition: width 220ms ease;
+}
+
+.scan-action {
+  flex: none;
+  min-height: 30px;
+  padding: 0 14px;
+  color: rgba(245, 245, 247, 0.86);
+  border: 1px solid rgba(255, 255, 255, 0.13);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
   font-size: 12px;
   cursor: pointer;
-  -webkit-backdrop-filter: blur(18px);
-  backdrop-filter: blur(18px);
   transition:
     color 160ms ease,
     background 160ms ease,
     transform 160ms ease;
 }
 
-.scan-cancel:hover {
+.scan-action:hover {
   color: #ffffff;
-  background: rgba(255, 255, 255, 0.13);
+  background: rgba(255, 255, 255, 0.14);
 }
 
-.scan-cancel:active {
+.scan-action:active {
   transform: scale(0.96);
 }
 
-.scan-cancel:disabled {
+.scan-action:disabled {
   cursor: default;
   opacity: 0.5;
+}
+
+@keyframes scan-pulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(10, 132, 255, 0.5);
+  }
+
+  70% {
+    box-shadow: 0 0 0 9px rgba(10, 132, 255, 0);
+  }
+
+  100% {
+    box-shadow: 0 0 0 0 rgba(10, 132, 255, 0);
+  }
 }
 
 .gallery {
@@ -1134,6 +1300,79 @@ body.cache-confirm-open {
   }
 }
 
+/* ---------------------------------------------------------------------------
+   实况照片（Apple Live Photo）
+   卡片左下角一个 LIVE 角标；鼠标停住后在原地叠一段静音视频。
+   视频是绝对定位的，所以出现/消失不会让卡片尺寸变化（不影响流式布局）。
+--------------------------------------------------------------------------- */
+
+.live-badge {
+  position: absolute;
+  bottom: 10px;
+  left: 10px;
+  z-index: 3;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 9px 4px 7px;
+  color: rgba(255, 255, 255, 0.92);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.42);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  -webkit-backdrop-filter: blur(10px);
+  backdrop-filter: blur(10px);
+  pointer-events: none;
+}
+
+.live-dot {
+  position: relative;
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  flex: none;
+  border: 1px solid rgba(255, 255, 255, 0.62);
+  border-radius: 50%;
+}
+
+.live-dot::after {
+  content: "";
+  position: absolute;
+  inset: 2px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.card-live-video {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  opacity: 0;
+  background: #000000;
+  transition: opacity 180ms ease;
+  pointer-events: none;
+}
+
+.media-card.is-live-playing .card-live-video {
+  opacity: 1;
+}
+
+/* 视频盖上来时把静止图藏掉：不然两层的细微色差会像"重影" */
+.media-card.is-live-playing img {
+  opacity: 0;
+}
+
+.media-card.is-live-playing .live-badge {
+  background: rgba(10, 132, 255, 0.55);
+  border-color: rgba(255, 255, 255, 0.24);
+}
+
 .skeleton-grid {
   margin-top: 30px;
 }
@@ -1430,6 +1669,7 @@ body.viewer-open {
 }
 
 .viewer-media {
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1438,6 +1678,19 @@ body.viewer-open {
   transform: translate3d(0, 0, 0) scale(1);
   transform-origin: center center;
   will-change: transform;
+}
+
+/* 实况照片：视频叠在静止图上面（同一个盒子），播完就撤掉 */
+.viewer-live-video {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  background: transparent;
+  outline: none;
+  animation: viewer-image-in 300ms cubic-bezier(0.22, 0.8, 0.28, 1) both;
 }
 
 .viewer-media.is-zoomed {
@@ -1577,6 +1830,43 @@ body.viewer-open {
   align-items: center;
   gap: 8px;
   pointer-events: auto;
+}
+
+.viewer-live {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 11px 7px 9px;
+  color: rgba(255, 255, 255, 0.88);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.075);
+  font-size: 11px;
+  font-weight: 550;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  cursor: pointer;
+  -webkit-backdrop-filter: blur(18px);
+  backdrop-filter: blur(18px);
+  transition:
+    color 160ms ease,
+    background 160ms ease;
+}
+
+.viewer-live[hidden] {
+  display: none;
+}
+
+.viewer-live .live-dot {
+  width: 11px;
+  height: 11px;
+}
+
+.viewer-live:hover {
+  color: #ffffff;
+  background: rgba(10, 132, 255, 0.28);
+  border-color: rgba(10, 132, 255, 0.42);
 }
 
 .viewer-open-original {
@@ -2224,4 +2514,48 @@ body.viewer-open {
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
   }
+}
+
+/* ---------------------------------------------------------------------------
+   2.0 流式照片墙
+   只渲染可视区附近的块，上下各放一个撑高的占位块维持滚动条长度。
+   块高度模型见 public/photo-stream.js 的 buildBlocks：
+     扫描块 = 行数 × 行高（padding-bottom 补回最后一行缺的行间距）
+     日期块 = 表头 + 行数 × 行高 − 行间距 + 天间距
+   --------------------------------------------------------------------------- */
+
+.stream-window {
+  display: block;
+}
+
+.stream-spacer {
+  width: 100%;
+  pointer-events: none;
+}
+
+.stream-block {
+  margin: 0;
+  animation: none;
+  /* 块高度由 JS 精确预测，这里不能再让浏览器猜（contain-intrinsic-size 会让高度失真） */
+  content-visibility: visible;
+  contain-intrinsic-size: none;
+}
+
+.stream-block.is-day {
+  padding-bottom: 30px;
+}
+
+.stream-block.is-scan {
+  padding-bottom: 8px;
+}
+
+.stream-placeholder {
+  cursor: default;
+  background: #101012;
+  border-color: rgba(255, 255, 255, 0.035);
+  box-shadow: none;
+}
+
+.stream-placeholder .thumb-shimmer {
+  opacity: 0.5;
 }

@@ -1,23 +1,38 @@
 {
   "name": "ios-dark-album",
-  "version": "1.11.0",
+  "version": "2.0.0",
   "private": true,
-  "description": "我的相册 - Windows 桌面相册，本地读取照片和视频",
+  "description": "我的相册 - 本地照片/视频浏览（Node.js 服务 + 浏览器，无需 Electron）",
   "author": "My Album",
   "license": "MIT",
-  "main": "electron/main.js",
   "packageManager": "pnpm@11.28.5",
   "scripts": {
-    "start": "electron .",
-    "dev": "electron .",
+    "start": "node server.js",
     "start:web": "node server.js",
     "check": "node tools/check-syntax.js",
-    "icon": "node tools/make-icon.js",
-    "pack": "electron-builder --dir",
-    "dist": "electron-builder --win nsis --x64"
+    "test:geometry": "node tools/test-stream-geometry.js",
+    "test:stream": "node tools/test-stream.js",
+    "test:dom": "node tools/test-stream-dom.js",
+    "test:nav": "node tools/test-folder-nav.js",
+    "test:live": "node tools/test-live-photo.js",
+    "test:cache": "node tools/test-cache.js",
+    "test:color": "node tools/test-heic-color.js",
+    "test:paths": "node tools/test-install-paths.js",
+    "pack": "node tools/pack.js",
+    "pack:installer": "node tools/pack.js --installer",
+    "pack:verify": "node tools/verify-pack.js",
+    "pack:test": "node tools/test-setup.js",
+    "release": "node tools/release.js",
+    "sign": "node tools/sign.js",
+    "test": "node tools/test-stream-geometry.js && node tools/test-stream.js && node tools/test-folder-nav.js && node tools/test-live-photo.js && node tools/test-cache.js && node tools/test-heic-color.js && node tools/test-install-paths.js && node tools/test-stream-dom.js",
+    "audit:live": "node tools/audit-live-photos.js",
+    "audit:cache": "node tools/audit-cache.js",
+    "bench:real": "node tools/bench-real-archive.js",
+    "bench:scan": "node tools/bench-scan.js",
+    "bench:poll": "node tools/bench-scan.js --client",
+    "icon": "node tools/make-icon.js"
   },
   "keywords": [
-    "electron",
     "photo-album",
     "windows",
     "heic",
@@ -25,13 +40,6 @@
   ],
   "engines": {
     "node": ">=20.8.1"
-  },
-  "pnpm": {
-    "onlyBuiltDependencies": [
-      "electron",
-      "sharp",
-      "electron-winstaller"
-    ]
   },
   "dependencies": {
     "@ffmpeg-installer/win32-x64": "^4.1.0",
@@ -42,9 +50,5 @@
     "leaflet.markercluster": "^1.5.3",
     "mp4box": "^2.4.1",
     "sharp": "^0.35.5"
-  },
-  "devDependencies": {
-    "electron": "44.9.1",
-    "electron-builder": "26.15.3"
   }
 }

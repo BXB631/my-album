@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="theme-color" content="#000000">
   <title>我的相册</title>
+  <link rel="icon" href="/assets/icon.png" type="image/png">
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
@@ -22,9 +23,11 @@
       </a>
 
       <div class="topbar-actions">
-        <div class="topbar-open-mode" role="group" aria-label="图片打开方式">
-          <button type="button" class="is-active" data-open-mode="viewer" aria-pressed="true" title="在相册内浏览，可左右翻页">相册</button>
-          <button type="button" data-open-mode="external" aria-pressed="false" title="用系统照片打开原图">系统</button>
+        <button class="topbar-toggle is-active" id="directButton" type="button" aria-pressed="true" title="图片和视频都先试原图，试不动自动转换 / 转码">直出</button>
+
+        <div class="topbar-open-mode" role="group" aria-label="打开方式">
+          <button type="button" class="is-active" data-open-mode="viewer" aria-pressed="true" title="图片和视频都在相册内打开（可左右翻页）">相册</button>
+          <button type="button" data-open-mode="external" aria-pressed="false" title="图片用系统照片打开，视频用 PotPlayer 打开">系统</button>
         </div>
 
         <button class="icon-button" id="topbarFolderButton" type="button" aria-label="选择照片文件夹" title="选择照片文件夹">
@@ -76,12 +79,12 @@
       <div class="source-actions">
         <button class="source-button" id="chooseFolderButton" type="button">选择照片文件夹</button>
 
-        <button class="cache-button" id="clearCacheButton" type="button" title="清除缩略图、预览图和视频缓存">
+        <button class="cache-button" id="clearCacheButton" type="button" title="清理缓存：缩略图 / 打开的图片视频 / 全部">
           <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
             <path d="M4.5 7.25h15M9.25 7.25V5.5h5.5v1.75M7.2 7.25l.8 11.1a1.5 1.5 0 0 0 1.5 1.4h5a1.5 1.5 0 0 0 1.5-1.4l.8-11.1" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
             <path d="M10.2 10.8v5.4M13.8 10.8v5.4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
           </svg>
-          <span>清除缓存</span>
+          <span>清理缓存</span>
           <span class="cache-size" id="cacheSize">—</span>
         </button>
       </div>
@@ -97,6 +100,15 @@
       </aside>
 
       <div class="library-content">
+        <div class="scan-bar" id="scanBar" hidden>
+          <span class="scan-pulse" aria-hidden="true"></span>
+          <p id="scanText" role="status" aria-live="polite">正在扫描照片文件夹…</p>
+          <span class="scan-track" aria-hidden="true">
+            <span class="scan-fill" id="scanFill"></span>
+          </span>
+          <button class="scan-action" id="scanCancelButton" type="button">停止加载</button>
+        </div>
+
         <div class="gallery-toolbar">
           <div class="mobile-folder-filter">
             <label for="folderSelect">照片目录</label>
@@ -114,12 +126,6 @@
     </footer>
   </main>
 
-  <div class="scan-overlay" id="scanOverlay" hidden>
-    <span class="ios-spinner" aria-hidden="true"></span>
-    <p id="scanText" role="status" aria-live="polite">正在扫描照片文件夹…</p>
-    <button class="scan-cancel" id="scanCancelButton" type="button">停止加载</button>
-  </div>
-
   <div class="confirm-backdrop" id="cacheConfirm" hidden>
     <section class="confirm-card" role="dialog" aria-modal="true" aria-labelledby="cacheConfirmTitle" tabindex="-1">
       <div class="confirm-icon" aria-hidden="true">
@@ -130,16 +136,41 @@
       </div>
 
       <p class="confirm-kicker">存储空间</p>
-      <h2 id="cacheConfirmTitle">清除缓存？</h2>
+      <h2 id="cacheConfirmTitle">清理缓存</h2>
       <p class="confirm-text">
-        将删除缩略图、预览图和视频转码缓存，不会删除原始照片。<br>
-        下次打开照片时会重新生成。
+        清理缓存不会删除原始照片，下次打开时会重新生成。
       </p>
+
+      <div class="cache-options" id="cacheOptions">
+        <button class="cache-option" id="cacheClearThumbnails" type="button" data-cache-kind="thumbnails">
+          <span class="cache-option-head">
+            <span class="cache-option-name">缩略图缓存</span>
+            <span class="cache-option-size" id="cacheThumbnailsSize">—</span>
+          </span>
+          <span class="cache-option-hint">照片墙和视频封面的小图。清掉之后浏览时会重新生成，照片多时会慢一些。</span>
+        </button>
+
+        <button class="cache-option" id="cacheClearMedia" type="button" data-cache-kind="media">
+          <span class="cache-option-head">
+            <span class="cache-option-name">打开的图片 / 视频缓存</span>
+            <span class="cache-option-size" id="cacheMediaSize">—</span>
+          </span>
+          <span class="cache-option-hint">你打开过的图片预览大图和视频转码结果。清掉之后下次打开重新生成。</span>
+        </button>
+
+        <button class="cache-option is-danger" id="cacheClearAll" type="button" data-cache-kind="all">
+          <span class="cache-option-head">
+            <span class="cache-option-name">全部缓存</span>
+            <span class="cache-option-size" id="cacheAllSize">—</span>
+          </span>
+          <span class="cache-option-hint">上面两项一起清掉，另外还包括播放列表等零碎文件。</span>
+        </button>
+      </div>
+
       <p class="confirm-size" id="cacheConfirmSize"></p>
 
       <div class="confirm-actions">
         <button class="confirm-cancel" id="cacheCancelButton" type="button">取消</button>
-        <button class="confirm-danger" id="cacheConfirmButton" type="button">清除缓存</button>
       </div>
     </section>
   </div>
@@ -190,6 +221,9 @@
         <div class="viewer-date" id="viewerDate"></div>
       </div>
       <div class="viewer-footer-actions">
+        <button class="viewer-live" id="viewerLive" type="button" title="播放实况（L）" hidden>
+          <span class="live-dot" aria-hidden="true"></span>实况
+        </button>
         <button class="viewer-open-original" id="viewerOpenOriginal" type="button" title="用系统应用打开原文件">原图</button>
         <button class="viewer-zoom" id="viewerZoom" type="button" title="恢复 100%" hidden>100%</button>
       </div>
@@ -226,6 +260,7 @@
 
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
+  <script src="/photo-stream.js" defer></script>
   <script src="/app.js" defer></script>
 </body>
 </html>

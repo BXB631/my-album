@@ -11,15 +11,24 @@ const topbarFolderButton = document.querySelector('#topbarFolderButton');
 const folderList = document.querySelector('#folderList');
 const folderSelect = document.querySelector('#folderSelect');
 const sidebarCount = document.querySelector('#sidebarCount');
-const scanOverlay = document.querySelector('#scanOverlay');
+const scanBar = document.querySelector('#scanBar');
 const scanText = document.querySelector('#scanText');
+const scanFill = document.querySelector('#scanFill');
 const scanCancelButton = document.querySelector('#scanCancelButton');
 const clearCacheButton = document.querySelector('#clearCacheButton');
+const directButton = document.querySelector('#directButton');
 const cacheSize = document.querySelector('#cacheSize');
 const openModeButtons = document.querySelectorAll('[data-open-mode]');
 const cacheConfirm = document.querySelector('#cacheConfirm');
 const cacheConfirmSize = document.querySelector('#cacheConfirmSize');
-const cacheConfirmButton = document.querySelector('#cacheConfirmButton');
+const cacheOptionButtons = [
+  ...document.querySelectorAll('[data-cache-kind]'),
+];
+const cacheGroupSizes = {
+  thumbnails: document.querySelector('#cacheThumbnailsSize'),
+  media: document.querySelector('#cacheMediaSize'),
+  all: document.querySelector('#cacheAllSize'),
+};
 const cacheCancelButton = document.querySelector('#cacheCancelButton');
 
 const viewer = document.querySelector('#viewer');
@@ -38,6 +47,7 @@ const viewerDetailsButton = document.querySelector('#viewerDetailsButton');
 const viewerHintDesktop = document.querySelector('#viewerHintDesktop');
 const viewerHintTouch = document.querySelector('#viewerHintTouch');
 const viewerOpenOriginal = document.querySelector('#viewerOpenOriginal');
+const viewerLive = document.querySelector('#viewerLive');
 const detailsBackdrop = document.querySelector('#detailsBackdrop');
 const detailsPanel = document.querySelector('#viewerDetails');
 const detailsClose = document.querySelector('#detailsClose');
@@ -74,6 +84,16 @@ const BROWSER_NATIVE_IMAGE_EXTENSIONS = new Set([
   'BMP',
   'AVIF',
 ]);
+
+// HEIF 家族（HEIC/HEIF/HIF）：Chromium 自己不带 HEIF/HEVC 解码器，但 Windows 上
+// 装了「HEIF 图像扩展 + HEVC 视频扩展」之后 <img> 是能**直接显示原图**的。
+// 所以这几类"先拿源文件试一次"，失败了再退回服务端转换（TIFF/RAW 这种浏览器肯定
+// 显示不了的，试都不用试，仍然直接走转换预览）。
+const TRIAL_SOURCE_IMAGE_EXTENSIONS = new Set(['HEIC', 'HEIF', 'HIF']);
+// 本会话里"这台浏览器确实能直接显示 HEIC 原图"的结论（一个容器一个键，值 '1'）
+const IMAGE_SOURCE_VERDICT_PREFIX = 'album-image-source-v1:';
+// 每张图这次实际显示的是源文件还是转换图（详情面板要说实话，见 imageSourceLabelFor）
+const imageDisplaySources = new Map();
 
 const MUNICIPALITIES = new Set([
   '北京',
@@ -126,19 +146,14 @@ const MIN_SCALE = 1;
 const MAX_SCALE = 5;
 
 let items = [];
-let allItems = [];
 let libraryData = null;
 let activeFolder = 'all';
-let galleryGroups = [];
-let renderedGroupCount = 0;
-let gallerySentinel = null;
-let galleryObserver = null;
-const INITIAL_GALLERY_GROUPS = 3;
-const GALLERY_GROUP_BATCH = 3;
+let streamState = null;
+let folderNavRevision = -1;
+let folderNavToken = null;
+let folderNavRetry = null;
 let isLoading = false;
 let isChoosingFolder = false;
-let scanController = null;
-let scanWasCanceled = false;
 let cacheInfo = { bytes: 0, files: 0 };
 let cacheInfoToken = 0;
 let isClearingCache = false;
@@ -157,6 +172,12 @@ let cacheConfirmOpen = false;
 let lastCacheFocus = null;
 let toastTimer = null;
 let currentIndex = -1;
+// 2.0：查看器只持有当前这张 + 服务端给的左右邻居，
+// 翻页不需要把整个图库加载进内存。
+let viewerItem = null;
+let viewerPrevItem = null;
+let viewerNextItem = null;
+let viewerPosition = { index: -1, total: 0 };
 let lastFocusedElement = null;
 let videoElement = null;
 let scale = 1;
@@ -171,10 +192,6 @@ let pendingPhotoId = new URLSearchParams(window.location.search).get('photo');
 
 function pad(value) {
   return String(value).padStart(2, '0');
-}
-
-function dayKey(date) {
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
 }
 
 function formatDay(date) {
@@ -227,12 +244,26 @@ function formatDetailDate(value) {
 
 function syncCacheButton() {
   clearCacheButton.disabled = isLoading || isClearingCache;
+  clearCacheButton.classList.toggle('is-busy', isClearingCache);
+}
+
+// 读缓存占用：一共三档（缩略图 / 打开的图片视频 / 全部），
+// 按钮上显示"全部"，弹窗里三个选项各显示自己那一档。
+function readCacheGroup(data, key) {
+  const group = data?.[key];
+
+  return {
+    bytes: Number(group?.bytes) || 0,
+    files: Number(group?.files) || 0,
+  };
 }
 
 function updateCacheInfo(info) {
   cacheInfo = {
     bytes: Number(info?.bytes) || 0,
     files: Number(info?.files) || 0,
+    thumbnails: readCacheGroup(info, 'thumbnails'),
+    media: readCacheGroup(info, 'media'),
   };
 
   const size = formatBytes(cacheInfo.bytes);
@@ -241,6 +272,29 @@ function updateCacheInfo(info) {
     cacheInfo.bytes > 0
       ? `当前占用 ${size} · ${cacheInfo.files} 个缓存文件`
       : '当前没有缓存文件';
+
+  for (const [key, element] of Object.entries(cacheGroupSizes)) {
+    const group =
+      key === 'all'
+        ? { bytes: cacheInfo.bytes, files: cacheInfo.files }
+        : cacheInfo[key];
+
+    if (element) {
+      element.textContent = group.bytes > 0 ? formatBytes(group.bytes) : '空';
+    }
+  }
+
+  for (const button of cacheOptionButtons) {
+    const key = button.dataset.cacheKind;
+    const group =
+      key === 'all'
+        ? { bytes: cacheInfo.bytes }
+        : cacheInfo[key];
+
+    // 这一档本来就是空的：按钮置灰，省得白点一下
+    button.disabled = isClearingCache || (group?.bytes || 0) <= 0;
+  }
+
   syncCacheButton();
 }
 
@@ -286,18 +340,13 @@ function openCacheConfirm() {
   cacheConfirmOpen = true;
   cacheConfirm.hidden = false;
   document.body.classList.add('cache-confirm-open');
-  cacheConfirmButton.disabled = false;
-  cacheCancelButton.disabled = false;
-  cacheConfirmButton.textContent = '清除缓存';
-  cacheConfirmSize.textContent =
-    cacheInfo.bytes > 0
-      ? `当前占用 ${formatBytes(cacheInfo.bytes)} · ${cacheInfo.files} 个缓存文件`
-      : '当前没有缓存文件';
+  updateCacheInfo(cacheInfo);
 
   loadCacheInfo();
 
   window.setTimeout(() => {
-    cacheConfirmButton.focus({ preventScroll: true });
+    const first = cacheOptionButtons.find((button) => !button.disabled);
+    (first || cacheCancelButton).focus({ preventScroll: true });
   }, 30);
 }
 
@@ -309,8 +358,12 @@ function closeCacheConfirm() {
   cacheConfirmOpen = false;
   cacheConfirm.hidden = true;
   document.body.classList.remove('cache-confirm-open');
-  cacheConfirmButton.textContent = '清除缓存';
-  cacheConfirmButton.disabled = false;
+
+  for (const button of cacheOptionButtons) {
+    button.disabled = false;
+    button.classList.remove('is-clearing');
+  }
+
   cacheCancelButton.disabled = false;
 
   if (lastCacheFocus && document.contains(lastCacheFocus)) {
@@ -320,55 +373,79 @@ function closeCacheConfirm() {
   lastCacheFocus = null;
 }
 
-async function clearCacheNow() {
+const CACHE_KIND_LABELS = {
+  thumbnails: '缩略图缓存',
+  media: '打开的图片 / 视频缓存',
+  all: '全部缓存',
+};
+
+async function clearCacheNow(kind = 'all') {
   if (isClearingCache) {
     return;
   }
 
   const previousBytes = cacheInfo.bytes;
+  const button = cacheOptionButtons.find(
+    (option) => option.dataset.cacheKind === kind
+  );
+
   isClearingCache = true;
-  cacheConfirmButton.disabled = true;
   cacheCancelButton.disabled = true;
-  cacheConfirmButton.textContent = '正在清理…';
-  clearCacheButton.classList.add('is-busy');
+
+  for (const option of cacheOptionButtons) {
+    option.disabled = true;
+  }
+
+  if (button) {
+    button.classList.add('is-clearing');
+  }
+
   syncCacheButton();
 
   try {
     const response = await fetch('/api/cache/clear', {
       method: 'POST',
-      headers: { Accept: 'application/json' },
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ kind }),
     });
     const data = await response.json().catch(() => null);
 
     if (!response.ok) {
-      throw new Error(data?.error || `清除缓存失败（${response.status}）`);
+      throw new Error(data?.error || `清理缓存失败（${response.status}）`);
     }
 
     updateCacheInfo(data);
-    closeCacheConfirm();
-    await loadCacheInfo();
 
     const released = previousBytes - cacheInfo.bytes;
+    const label = CACHE_KIND_LABELS[kind] || '缓存';
 
     showToast(
       released > 0
-        ? `缓存已清除，释放 ${formatBytes(released)}`
-        : '缓存已清除'
+        ? `${label}已清理，释放 ${formatBytes(released)}`
+        : `${label}本来就是空的`
     );
+
+    // 弹窗留着：三档可以连着清，数字会跟着刷新
+    await loadCacheInfo();
   } catch (error) {
     console.error(error);
-    showToast(error.message || '清除缓存失败');
+    showToast(error.message || '清理缓存失败');
+    await loadCacheInfo();
   } finally {
     isClearingCache = false;
-    clearCacheButton.classList.remove('is-busy');
 
-    if (cacheConfirmOpen) {
-      cacheConfirmButton.disabled = false;
-      cacheCancelButton.disabled = false;
-      cacheConfirmButton.textContent = '清除缓存';
+    if (button) {
+      button.classList.remove('is-clearing');
     }
 
-    syncCacheButton();
+    if (cacheConfirmOpen) {
+      cacheCancelButton.disabled = false;
+    }
+
+    updateCacheInfo(cacheInfo);
   }
 }
 
@@ -394,8 +471,8 @@ function setOpenMode(mode) {
 
   showToast(
     openMode === 'viewer'
-      ? '点击图片将在相册内浏览'
-      : '点击图片将用系统照片打开原图'
+      ? '点击图片 / 视频都在相册内打开'
+      : '点击图片用系统照片、视频用 PotPlayer 打开'
   );
 }
 
@@ -436,11 +513,12 @@ async function openOriginal(item) {
 }
 
 function handleCardOpen(item) {
-  if (item.type === 'video') {
-    openOriginal(item);
+  if (!item) {
     return;
   }
 
+  // 相册模式：图片和视频都在应用内打开（视频走"直出 / 转码"那条播放链）。
+  // 只有系统模式才交出去：图片 → 系统照片，视频 → PotPlayer。
   if (openMode === 'viewer') {
     openViewer(item.id);
     return;
@@ -490,7 +568,7 @@ function isViewerOpen() {
 }
 
 function getCurrentItem() {
-  return items[currentIndex] || null;
+  return viewerItem || items[currentIndex] || null;
 }
 
 function showToast(message) {
@@ -573,23 +651,6 @@ function isFolderAvailable(filter) {
   return (libraryData.folders || []).some((year) =>
     year.months.some((month) => month.key === filter)
   );
-}
-
-function filterItems(filter) {
-  if (filter === 'all') {
-    return allItems;
-  }
-
-  if (filter === 'unclassified') {
-    return allItems.filter((item) => !item.year);
-  }
-
-  if (filter.startsWith('year-')) {
-    const year = Number(filter.slice(5));
-    return allItems.filter((item) => item.year === year);
-  }
-
-  return allItems.filter((item) => item.monthKey === filter);
 }
 
 function createFolderButton({ key, label, count, className }) {
@@ -702,31 +763,39 @@ function updateFolderSelection() {
 }
 
 function updateSummary() {
-  if (!libraryData) {
+  if (!streamState) {
     return;
   }
 
-  if (!allItems.length) {
-    summary.textContent = `${libraryData.source?.name || '这个文件夹'} 里还没有照片或视频`;
+  const sourceName = streamState.source?.name || '这个文件夹';
+
+  if (streamState.phase === 'error') {
+    summary.textContent = '读取相册失败';
     return;
   }
 
-  const parts = [`${items.length} 个项目`];
-  const imageCount = items.filter((item) => item.type === 'image').length;
-  const videoCount = items.length - imageCount;
-
-  if (imageCount) {
-    parts.push(`${imageCount} 张照片`);
+  if (streamState.scanning) {
+    summary.textContent = `正在扫描 · 已发现 ${streamState.total} 项 · 已读取 ${streamState.filled} 项`;
+    return;
   }
 
-  if (videoCount) {
-    parts.push(`${videoCount} 个视频`);
+  if (!streamState.total) {
+    summary.textContent = `${sourceName} 里还没有照片或视频`;
+    return;
+  }
+
+  const parts = [`${streamState.total} 个项目`];
+
+  if (streamState.imageCount) {
+    parts.push(`${streamState.imageCount} 张照片`);
+  }
+
+  if (streamState.videoCount) {
+    parts.push(`${streamState.videoCount} 个视频`);
   }
 
   if (activeFolder !== 'all') {
     parts.push(getFolderLabel(activeFolder));
-  } else if (items.length !== allItems.length) {
-    parts.push(`共 ${allItems.length} 个`);
   }
 
   summary.textContent = parts.join(' · ');
@@ -737,7 +806,7 @@ function setActiveFolder(filter, { scroll = false } = {}) {
     filter = 'all';
   }
 
-  if (filter === activeFolder && items.length) {
+  if (filter === activeFolder) {
     updateFolderSelection();
     return;
   }
@@ -747,36 +816,212 @@ function setActiveFolder(filter, { scroll = false } = {}) {
   }
 
   activeFolder = filter;
-  items = filterItems(filter);
   updateFolderSelection();
   updateSummary();
-  renderGalleryItems();
+
+  // 过滤在服务端做：前端只换窗口数据，不用把整个图库拿下来再筛。
+  stream.setFilter(filter).catch(() => {
+    showToast('切换目录失败，请稍后重试');
+  });
 
   if (scroll) {
-    const header = document.querySelector('.library-layout');
-    if (header) {
-      const top = header.getBoundingClientRect().top + window.scrollY - 74;
-      window.scrollTo({ top, behavior: 'smooth' });
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 实况照片（Apple Live Photo）：图片 + 同名 MOV 合成一项
+//   · 卡片左下角一个 LIVE 角标，鼠标停下 350ms 后在原地静音播放
+//   · 查看器里点"实况"（或按 L）在静止图上叠加播放，放完自动回到静止图
+// 判定字段由服务端给出：item.livePhoto / item.liveVideoUrl。
+// ---------------------------------------------------------------------------
+const LIVE_HOVER_DELAY = 350;
+
+function isLivePhoto(item) {
+  return Boolean(item && item.type === 'image' && item.livePhoto && item.liveVideoUrl);
+}
+
+// 实况照片的伴随 MOV 也是视频，而且 iPhone 上同样是 HEVC：能直出就直出，解不了才转码。
+// 伴随项没有独立的 codec 字段时（拿不到）按"未知编码"处理，一律走转码。
+function liveVideoPlan(item) {
+  const companionId = item?.liveVideoId;
+  const extension = String(item?.liveVideoName || '')
+    .split('.')
+    .pop()
+    .toUpperCase();
+
+  return videoPlaybackPlan({
+    id: companionId,
+    type: 'video',
+    name: item?.liveVideoName || 'live-photo.mov',
+    extension,
+    videoCodec: item?.liveVideoCodec || null,
+    fileUrl: `/api/file/${companionId}`,
+    videoUrl: item?.liveVideoUrl,
+  });
+}
+
+function canHoverPreview() {
+  return (
+    typeof window.matchMedia === 'function' &&
+    window.matchMedia('(hover: hover) and (pointer: fine)').matches
+  );
+}
+
+function createLiveBadge(label = '实况') {
+  const badge = document.createElement('span');
+  badge.className = 'live-badge';
+  badge.setAttribute('aria-hidden', 'true');
+  badge.innerHTML = `<span class="live-dot"></span>${label}`;
+  return badge;
+}
+
+// 悬停预览：延迟创建 <video>（避免鼠标扫过一排卡片就疯狂起播），
+// 停播时把节点整个移除并清掉 src，不让它继续占着解码器。
+function attachLivePreview(card, item) {
+  let video = null;
+  let timer = null;
+  // 直出尝试的兜底定时器：报错不用它，卡住才用它
+  let directTimer = null;
+
+  const clearDirectTimer = () => {
+    if (directTimer) {
+      window.clearTimeout(directTimer);
+      directTimer = null;
     }
-  }
+  };
+
+  const stop = () => {
+    if (timer) {
+      clearTimeout(timer);
+      timer = null;
+    }
+
+    clearDirectTimer();
+
+    if (!video) {
+      return;
+    }
+
+    video.pause();
+    video.removeAttribute('src');
+    video.remove();
+    video = null;
+    card.classList.remove('is-live-playing');
+  };
+
+  card.addEventListener('pointerenter', (event) => {
+    if (event.pointerType === 'touch' || video || timer) {
+      return;
+    }
+
+    if (!canHoverPreview() || isViewerOpen()) {
+      return;
+    }
+
+    timer = setTimeout(() => {
+      timer = null;
+
+      if (!card.isConnected || isViewerOpen()) {
+        return;
+      }
+
+      const plan = liveVideoPlan(item);
+      const startedWithDirect = plan.mode === 'direct';
+      // 报错和超时可能先后都来，只换一次（否则会并排留下两个预览节点）
+      let swappedToTranscode = false;
+
+      // 直出这条路试不动时（报错，或者卡住既没报错也没画面）：
+      // 记住这个伴随视频，然后静默换成转码那一份（静止图全程还在，不露黑）
+      const fallbackToTranscode = () => {
+        if (!startedWithDirect || !video || swappedToTranscode) {
+          return;
+        }
+
+        swappedToTranscode = true;
+        clearDirectTimer();
+        rememberDirectVideoFailure({ id: item.liveVideoId });
+        video.remove();
+        video = null;
+        card.classList.remove('is-live-playing');
+
+        const fallback = document.createElement('video');
+        fallback.className = 'card-live-video';
+        fallback.muted = true;
+        fallback.defaultMuted = true;
+        fallback.playsInline = true;
+        fallback.preload = 'auto';
+        fallback.setAttribute('aria-hidden', 'true');
+        fallback.addEventListener('canplay', () => {
+          if (video === fallback) {
+            card.classList.add('is-live-playing');
+          }
+        });
+        fallback.addEventListener('error', stop, { once: true });
+        fallback.src = item.liveVideoUrl;
+        video = fallback;
+        card.append(fallback);
+
+        const retry = fallback.play();
+
+        if (retry && typeof retry.catch === 'function') {
+          retry.catch(() => stop());
+        }
+      };
+
+      video = document.createElement('video');
+      video.className = 'card-live-video';
+      video.muted = true;
+      video.defaultMuted = true;
+      video.playsInline = true;
+      video.preload = 'auto';
+      video.setAttribute('aria-hidden', 'true');
+      video.addEventListener('canplay', () => {
+        clearDirectTimer();
+
+        if (video) {
+          card.classList.add('is-live-playing');
+        }
+      });
+      video.addEventListener('error', () => {
+        if (!startedWithDirect) {
+          stop();
+          return;
+        }
+
+        fallbackToTranscode();
+      });
+      video.src = plan.url;
+      card.append(video);
+
+      if (startedWithDirect) {
+        // 悬停这条路没有别的兜底：卡住就得自己收（比查看器更短的等待）
+        directTimer = window.setTimeout(() => {
+          directTimer = null;
+          fallbackToTranscode();
+        }, HOVER_DIRECT_TIMEOUT_MS);
+      }
+
+      const playPromise = video.play();
+
+      if (playPromise && typeof playPromise.catch === 'function') {
+        playPromise.catch(() => stop());
+      }
+    }, LIVE_HOVER_DELAY);
+  });
+
+  card.addEventListener('pointerleave', stop);
+  card.addEventListener('pointercancel', stop);
+  // 键盘聚焦卡片时不要突然出声，点击打开查看器时也要先收掉预览
+  card.addEventListener('focus', stop);
+  card.addEventListener('click', stop);
+
+  // 元素被挪回元素池 / 换项目时，photo-stream 会调用这个钩子收尾
+  card.__teardown = stop;
+  return stop;
 }
 
-function renderSkeleton() {
-  const grid = document.createElement('div');
-  grid.className = 'media-grid skeleton-grid';
-  grid.setAttribute('aria-hidden', 'true');
-
-  for (let index = 0; index < 8; index += 1) {
-    const card = document.createElement('div');
-    card.className = 'skeleton-card';
-    grid.append(card);
-  }
-
-  gallery.replaceChildren(grid);
-  gallery.dataset.state = 'loading';
-}
-
-function createImageCard(item) {
+function createImageCard(item, options = {}) {
   const card = document.createElement('button');
   card.type = 'button';
   card.className = 'media-card is-image';
@@ -789,7 +1034,6 @@ function createImageCard(item) {
 
   const image = document.createElement('img');
   image.alt = '';
-  image.loading = 'lazy';
   image.decoding = 'async';
 
   image.addEventListener(
@@ -808,13 +1052,28 @@ function createImageCard(item) {
     { once: true }
   );
 
-  image.src = item.thumbUrl;
+  // 2.0：缩略图交给流式调度器按优先级排队后再赋值，
+  // 卡片本身不再一创建就抢带宽。
+  if (!options.deferThumbnail) {
+    image.loading = 'lazy';
+    image.src = item.thumbUrl;
+  }
 
   const fallback = document.createElement('span');
   fallback.className = 'image-fallback';
   fallback.innerHTML = PHOTO_ICON;
 
   card.append(shimmer, image, fallback);
+
+  if (isLivePhoto(item)) {
+    card.classList.add('is-live');
+    card.setAttribute(
+      'aria-label',
+      `实况照片：${item.name}（带 ${item.liveVideoName || '同名视频'}）`
+    );
+    card.append(createLiveBadge());
+    attachLivePreview(card, item);
+  }
 
   card.addEventListener('click', () => {
     handleCardOpen(item);
@@ -823,7 +1082,7 @@ function createImageCard(item) {
   return card;
 }
 
-function createVideoCard(item) {
+function createVideoCard(item, options = {}) {
   const card = document.createElement('button');
   card.type = 'button';
   card.className = 'media-card is-video';
@@ -841,7 +1100,6 @@ function createVideoCard(item) {
   const poster = document.createElement('img');
   poster.className = 'video-poster';
   poster.alt = '';
-  poster.loading = 'lazy';
   poster.decoding = 'async';
 
   poster.addEventListener(
@@ -860,7 +1118,10 @@ function createVideoCard(item) {
     { once: true }
   );
 
-  poster.src = item.thumbUrl;
+  if (!options.deferThumbnail) {
+    poster.loading = 'lazy';
+    poster.src = item.thumbUrl;
+  }
 
   const placeholder = document.createElement('span');
   placeholder.className = 'video-placeholder';
@@ -878,38 +1139,46 @@ function createVideoCard(item) {
   return card;
 }
 
-function createMediaCard(item) {
-  return item.type === 'video'
-    ? createVideoCard(item)
-    : createImageCard(item);
+function createMediaCard(item, options = {}) {
+  const card =
+    item.type === 'video'
+      ? createVideoCard(item, options)
+      : createImageCard(item, options);
+
+  // 记一个"渲染指纹"：扫描期建出来的卡片里存的是当时的条目快照，
+  // 而实况照片的伴随视频信息（id/时长/编码）是扫描收尾或索引里才补上的。
+  // photo-stream 会拿这个指纹比对，发现条目变了就把这张卡片重建一次，
+  // 否则那张卡片会一直按"没有伴随视频"的旧快照行事（悬停预览就会白白去转码）。
+  card.__itemKey = itemRenderKey(item);
+  return card;
 }
 
-function groupItemsByDay(sourceItems) {
-  const groups = new Map();
-
-  for (const item of sourceItems) {
-    const date = new Date(item.takenAt);
-
-    if (Number.isNaN(date.getTime())) {
-      continue;
-    }
-
-    const key = dayKey(date);
-
-    if (!groups.has(key)) {
-      groups.set(key, { date, items: [] });
-    }
-
-    groups.get(key).items.push(item);
+// 只放"会影响这张卡片长什么样 / 怎么播"的字段
+function itemRenderKey(item) {
+  if (!item) {
+    return '';
   }
 
-  return [...groups.values()];
+  return [
+    item.id,
+    item.type,
+    item.livePhoto ? 'live' : '-',
+    item.liveVideoId || '-',
+    item.liveVideoCodec || '-',
+    item.liveVideoDuration === null || item.liveVideoDuration === undefined
+      ? '-'
+      : Math.round(item.liveVideoDuration),
+    item.duration === null || item.duration === undefined
+      ? '-'
+      : Math.round(item.duration),
+  ].join('|');
 }
 
-function createDayGroup(group, index) {
-  const section = document.createElement('section');
-  section.className = 'day-group';
-  section.style.animationDelay = `${Math.min(index * 55, 280)}ms`;
+// 2.0：分组信息来自服务端（/api/library/days），前端只负责把表头画出来。
+// 服务端顺手给了当天的主要城市，所以不用等该天的照片全部加载。
+function buildDayHeader(day) {
+  const date = new Date(`${day.key}T00:00:00`);
+  const valid = !Number.isNaN(date.getTime());
 
   const header = document.createElement('div');
   header.className = 'day-header';
@@ -917,187 +1186,205 @@ function createDayGroup(group, index) {
   const title = document.createElement('div');
   title.className = 'day-title';
 
-  const date = document.createElement('span');
-  date.className = 'day-date';
-  date.textContent = formatDay(group.date);
+  const dateElement = document.createElement('span');
+  dateElement.className = 'day-date';
+  dateElement.textContent = valid ? formatDay(date) : day.key;
 
   const weekday = document.createElement('span');
   weekday.className = 'day-weekday';
-  weekday.textContent = weekdayFormatter.format(group.date);
+  weekday.textContent = valid ? weekdayFormatter.format(date) : '';
 
-  title.append(date, weekday);
+  title.append(dateElement, weekday);
 
-  const cityCounts = new Map();
-
-  for (const item of group.items) {
-    if (item.city) {
-      cityCounts.set(item.city, (cityCounts.get(item.city) || 0) + 1);
-    }
-  }
-
-  let mainCity = null;
-  let mainCityCount = 0;
-
-  for (const [city, cityCount] of cityCounts) {
-    if (cityCount > mainCityCount) {
-      mainCity = city;
-      mainCityCount = cityCount;
-    }
-  }
-
-  if (mainCity) {
+  if (day.city) {
     const location = document.createElement('span');
     location.className = 'day-location';
-    location.textContent = `· ${formatCityName(mainCity)}`;
+    location.textContent = `· ${formatCityName(day.city)}`;
     title.append(location);
   }
 
   const count = document.createElement('span');
   count.className = 'day-count';
-  count.textContent = `${group.items.length} 个项目`;
+  count.textContent = `${day.count} 个项目`;
 
   header.append(title, count);
-
-  const grid = document.createElement('div');
-  grid.className = 'media-grid';
-
-  for (const item of group.items) {
-    grid.append(createMediaCard(item));
-  }
-
-  section.append(header, grid);
-  return section;
+  return header;
 }
 
-function renderLibrary(data) {
-  libraryData = data;
-  allItems = Array.isArray(data.items) ? data.items : [];
-  updateSource(data.source);
+// ---------------------------------------------------------------------------
+// 2.0 照片墙：交给 photo-stream.js 驱动
+//   summary → 铺占位格 → 只渲染可视块 → 按块取数 → 缩略图按优先级排队
+// ---------------------------------------------------------------------------
+
+async function fetchJson(url) {
+  const response = await fetch(url, {
+    cache: 'no-store',
+    headers: { Accept: 'application/json' },
+  });
+
+  if (!response.ok) {
+    throw new Error(`HTTP ${response.status}`);
+  }
+
+  return response.json();
+}
+
+function loadedItemsInViewOrder() {
+  const state = stream.getState();
+  const list = [];
+
+  for (const item of state.items) {
+    if (item) {
+      list.push(item);
+    }
+  }
+
+  return list;
+}
+
+// 侧栏目录现在是不是空的（空 = 只有"全部照片"，没有年/月，也没有"未分类"）
+function folderNavIsEmpty() {
+  return (
+    !libraryData ||
+    (!(libraryData.folders || []).length && !libraryData.uncategorizedCount)
+  );
+}
+
+function renderFolderNavFrom(data, revision) {
+  folderNavRevision = revision;
+  libraryData = {
+    total: data.total,
+    folders: data.folders || [],
+    uncategorizedCount: data.uncategorizedCount || 0,
+  };
 
   if (!isFolderAvailable(activeFolder)) {
     activeFolder = 'all';
   }
 
-  renderFolderNavigation(data);
-  items = filterItems(activeFolder);
-  updateSummary();
-  renderGalleryItems();
+  renderFolderNavigation(libraryData);
 }
 
-function resetGalleryPaging() {
-  if (galleryObserver) {
-    galleryObserver.disconnect();
-    galleryObserver = null;
-  }
-
-  gallerySentinel = null;
-  galleryGroups = [];
-  renderedGroupCount = 0;
-}
-
-function updateGallerySentinel() {
-  if (!gallerySentinel) {
+// 目录请求失败时允许下一轮重试：否则侧栏会一直停在空状态，
+// 看起来就是"时间目录检测不出来"（它其实只是那一次请求没成功）。
+function scheduleFolderNavRetry() {
+  if (folderNavRetry) {
     return;
   }
 
-  const remaining = galleryGroups.length - renderedGroupCount;
-  const button = gallerySentinel.querySelector('button');
+  folderNavRetry = window.setTimeout(() => {
+    folderNavRetry = null;
 
-  if (remaining <= 0) {
-    gallerySentinel.remove();
-    gallerySentinel = null;
-
-    if (galleryObserver) {
-      galleryObserver.disconnect();
-      galleryObserver = null;
+    if (streamState?.grouped && folderNavIsEmpty()) {
+      folderNavRevision = -1;
+      syncFolderNavigation(streamState);
     }
-
-    return;
-  }
-
-  if (button) {
-    button.textContent = `加载更多（还剩 ${remaining} 天）`;
-  }
+  }, 1500);
 }
 
-function appendGalleryGroups(count = GALLERY_GROUP_BATCH) {
-  if (!galleryGroups.length || renderedGroupCount >= galleryGroups.length) {
+function syncFolderNavigation(info) {
+  // 服务端把年/月目录跟着 summary 一起带回来了（扫描期也有，会边扫边长）：
+  // 直接渲染，不用再单发一个请求；内容没变时字段缺省，保持现状即可。
+  if (Array.isArray(info.folders) && info.foldersToken !== folderNavToken) {
+    folderNavToken = info.foldersToken || null;
+    renderFolderNavFrom(
+      {
+        total: info.libraryTotal || info.total,
+        folders: info.folders,
+        uncategorizedCount: info.uncategorizedCount || 0,
+      },
+      info.revision
+    );
     return;
   }
 
-  const nextEnd = Math.min(
-    galleryGroups.length,
-    renderedGroupCount + count
-  );
-
-  if (nextEnd <= renderedGroupCount) {
+  if (info.foldersToken && info.foldersToken === folderNavToken) {
+    // 目录没变（扫描期每轮的正常路径）：什么都不用做
+    if (info.grouped && info.libraryTotal) {
+      libraryData = { ...libraryData, total: info.libraryTotal };
+      sidebarCount.textContent = `${info.libraryTotal} 项`;
+    }
     return;
   }
 
-  const fragment = document.createDocumentFragment();
-
-  for (let index = renderedGroupCount; index < nextEnd; index += 1) {
-    fragment.append(createDayGroup(galleryGroups[index], index));
+  if (!info.grouped) {
+    // 老服务端（扫描期不带目录）才会走到这里：先清空，等扫描完成再取。
+    folderNavRevision = -1;
+    libraryData = { total: info.total, folders: [], uncategorizedCount: 0 };
+    renderFolderNavigation(libraryData);
+    return;
   }
 
-  renderedGroupCount = nextEnd;
+  // revision 相同 + 侧栏已经有内容 = 真的不用再取。
+  // 但只要侧栏现在是空的，就必须重新取一次：空状态很可能就是扫描期留下的，
+  // 而"revision 没变"并不等于"目录已经补回来了"。
+  if (info.revision === folderNavRevision && !folderNavIsEmpty()) {
+    return;
+  }
 
-  if (gallerySentinel?.isConnected) {
-    gallery.insertBefore(fragment, gallerySentinel);
+  folderNavRevision = info.revision;
+
+  fetchJson('/api/library/summary?folder=all')
+    .then((data) => {
+      renderFolderNavFrom(data, info.revision);
+    })
+    .catch(() => {
+      // 拿不到目录时保留现有导航，不影响照片浏览；但要把"已同步"标记撤掉，
+      // 免得一次失败就让侧栏永远空着。
+      folderNavRevision = -1;
+      scheduleFolderNavRetry();
+    });
+}
+
+function applyStreamState(info) {
+  streamState = info;
+  items = loadedItemsInViewOrder();
+
+  if (info.source) {
+    updateSource(info.source);
+  }
+
+  if (info.phase === 'error') {
+    summary.textContent = '读取相册失败';
+    setScanning(false);
+    return;
+  }
+
+  if (info.phase === 'canceled') {
+    summary.textContent = `已停止加载 · 已扫描 ${info.filled} 个项目`;
+    setOverlay('resume', `已停止加载，已保留 ${info.filled} 个项目`);
+    return;
+  }
+
+  if (info.scanning) {
+    setOverlay('cancel', `正在扫描照片文件夹… ${info.filled} / ${info.total}`);
   } else {
-    gallery.append(fragment);
+    setScanning(false);
   }
 
-  updateGallerySentinel();
+  gallery.dataset.state = info.phase === 'ready' ? 'ready' : 'loading';
+  gallery.setAttribute('aria-busy', info.scanning ? 'true' : 'false');
+
+  updateSummary();
+  syncFolderNavigation(info);
 }
 
-function observeGallerySentinel() {
-  if (!gallerySentinel || !('IntersectionObserver' in window)) {
-    return;
-  }
-
-  galleryObserver = new IntersectionObserver(
-    (entries) => {
-      if (entries.some((entry) => entry.isIntersecting)) {
-        appendGalleryGroups();
-      }
-    },
-    { rootMargin: '1200px 0px' }
-  );
-
-  galleryObserver.observe(gallerySentinel);
-}
-
-function renderGalleryItems() {
-  resetGalleryPaging();
-  gallery.replaceChildren();
-
-  if (!items.length) {
-    renderEmptyState();
-    return;
-  }
-
-  galleryGroups = groupItemsByDay(items);
-  renderedGroupCount = 0;
-
-  gallerySentinel = document.createElement('div');
-  gallerySentinel.className = 'gallery-sentinel';
-
-  const moreButton = document.createElement('button');
-  moreButton.type = 'button';
-  moreButton.textContent = '加载更多照片';
-  moreButton.addEventListener('click', () => {
-    appendGalleryGroups();
-  });
-  gallerySentinel.append(moreButton);
-  gallery.append(gallerySentinel);
-
-  appendGalleryGroups(INITIAL_GALLERY_GROUPS);
-  observeGallerySentinel();
-
-  gallery.dataset.state = 'ready';
-  gallery.setAttribute('aria-busy', 'false');
-}
+const stream = window.createPhotoStream({
+  gallery,
+  renderCard: (item, options) => createMediaCard(item, options),
+  // 条目指纹：扫描期建的卡片如果和最新条目对不上（比如实况照片刚补上伴随视频信息），
+  // photo-stream 会把那一格重建一次
+  itemKey: itemRenderKey,
+  renderDayHeader: buildDayHeader,
+  fetchJson,
+  renderEmptyState: () => buildEmptyCard(),
+  renderErrorState: () => buildErrorCard(),
+  onBeforeFirstLoad: () => {
+    gallery.dataset.state = 'loading';
+    gallery.setAttribute('aria-busy', 'true');
+  },
+  onStateChange: applyStreamState,
+});
 
 function createStateCard({ icon, title, description, buttonLabel, onAction }) {
   const card = document.createElement('div');
@@ -1127,10 +1414,11 @@ function createStateCard({ icon, title, description, buttonLabel, onAction }) {
   return card;
 }
 
-function renderEmptyState() {
-  resetGalleryPaging();
-  const hasAnyItems = allItems.length > 0;
-  const card = hasAnyItems
+// 2.0：空态/错误态由照片墙在可视区里渲染，这里只负责造卡片。
+function buildEmptyCard() {
+  const hasAnyItems = (streamState?.total || 0) > 0;
+
+  return hasAnyItems
     ? createStateCard({
         icon: EMPTY_ICON,
         title: '这个目录里还没有照片',
@@ -1146,15 +1434,10 @@ function renderEmptyState() {
         buttonLabel: '选择照片文件夹',
         onAction: chooseFolder,
       });
-
-  gallery.replaceChildren(card);
-  gallery.dataset.state = 'ready';
-  gallery.setAttribute('aria-busy', 'false');
 }
 
-function renderErrorState() {
-  resetGalleryPaging();
-  const card = createStateCard({
+function buildErrorCard() {
+  return createStateCard({
     icon: '<span aria-hidden="true">!</span>',
     title: '相册读取失败',
     description:
@@ -1162,10 +1445,6 @@ function renderErrorState() {
     buttonLabel: '重新选择文件夹',
     onAction: chooseFolder,
   });
-
-  gallery.replaceChildren(card);
-  gallery.dataset.state = 'error';
-  gallery.setAttribute('aria-busy', 'false');
 }
 
 function showSpinner(message = '正在加载…') {
@@ -1191,6 +1470,123 @@ function stopVideo() {
   }
 
   videoElement = null;
+}
+
+// --- 实况照片的查看器播放 -------------------------------------------------
+// 静止图留在原地当"海报"，视频叠在同一个盒子里播（object-fit: contain）；
+// 播完 / 报错 / 切图都会把视频节点移除，回到静止图。
+let liveVideoElement = null;
+// 实况视频"直出尝试"的兜底定时器（报错不用它，卡住才用它）。
+// 放在外面是为了切图/关闭查看器时能一起收掉，否则 5 秒后它会把暂停的视频又拉起来。
+let liveDirectTimer = null;
+
+function stopLiveVideo() {
+  viewerMedia.classList.remove('is-live-playing');
+
+  if (liveDirectTimer) {
+    window.clearTimeout(liveDirectTimer);
+    liveDirectTimer = null;
+  }
+
+  if (!liveVideoElement) {
+    return;
+  }
+
+  const video = liveVideoElement;
+  liveVideoElement = null;
+
+  try {
+    video.pause();
+    video.removeAttribute('src');
+    video.remove();
+  } catch {
+    // 已经移除时忽略
+  }
+}
+
+function playLivePhoto() {
+  const item = getCurrentItem();
+
+  if (!isLivePhoto(item) || !viewerMedia.querySelector('img')) {
+    return;
+  }
+
+  if (liveVideoElement) {
+    stopLiveVideo();
+    return;
+  }
+
+  const plan = liveVideoPlan(item);
+
+  const video = document.createElement('video');
+  video.className = 'viewer-live-video';
+  video.playsInline = true;
+  video.autoplay = true;
+  video.preload = 'auto';
+  video.setAttribute('aria-label', `${item.name} 的实况视频`);
+
+  const finish = () => {
+    if (liveVideoElement === video) {
+      hideSpinner();
+    }
+  };
+
+  const clearDirectTimer = () => {
+    if (liveDirectTimer) {
+      window.clearTimeout(liveDirectTimer);
+      liveDirectTimer = null;
+    }
+  };
+
+  video.addEventListener('canplay', () => {
+    clearDirectTimer();
+    finish();
+    viewerMedia.classList.add('is-live-playing');
+  });
+  video.addEventListener('ended', stopLiveVideo);
+  video.addEventListener('error', () => {
+    clearDirectTimer();
+
+    // 直出失败：记住它，然后换成转码那一份再试一次（静止图还在，看不到黑屏）
+    if (plan.mode !== 'direct') {
+      stopLiveVideo();
+      showToast('这个实况视频暂时无法播放');
+      return;
+    }
+
+    rememberDirectVideoFailure({ id: item.liveVideoId });
+    stopLiveVideo();
+    showSpinner('这个实况视频的原始编码浏览器解不了，正在准备转码版本…');
+    // 再走一遍：这次记住过失败了，计划直接就是转码那一份
+    playLivePhoto();
+  });
+
+  showSpinner(
+    plan.mode === 'direct' ? '正在打开实况视频…' : '正在准备实况视频…'
+  );
+  liveVideoElement = video;
+  viewerMedia.append(video);
+  video.src = plan.url;
+
+  if (plan.mode === 'direct') {
+    // 既没报错也没画面（卡住）也要兜住：直出失败就记住并换转码
+    liveDirectTimer = window.setTimeout(() => {
+      liveDirectTimer = null;
+      rememberDirectVideoFailure({ id: item.liveVideoId });
+      stopLiveVideo();
+      showSpinner('这个实况视频的原始编码浏览器解不了，正在准备转码版本…');
+      playLivePhoto();
+    }, DIRECT_ATTEMPT_TIMEOUT_MS);
+  }
+
+  const playPromise = video.play();
+
+  if (playPromise && typeof playPromise.catch === 'function') {
+    playPromise.catch(() => {
+      stopLiveVideo();
+      hideSpinner();
+    });
+  }
 }
 
 function applyTransform() {
@@ -1285,14 +1681,151 @@ function zoomAt(nextScale, clientX, clientY) {
   applyTransform();
 }
 
-function preloadNeighbors() {
-  for (const offset of [-1, 1]) {
-    const item = items[currentIndex + offset];
+// 查看器里这张图到底用哪个地址显示：
+//   浏览器原生支持的格式（JPG/PNG/WebP/GIF/BMP/AVIF）→ 直接给源文件本体，
+//   这样看到的就是原图，服务端也不会为它生成任何 JPEG；
+//   HEIC/HEIF → **先给源文件试一次**（装了系统解码器的浏览器能直接显示原图，
+//   而且色彩由浏览器按原图自带的配置做管理，比我们转出来的裸 JPEG 准）；
+//   其它（TIFF/RAW…）→ 用转换出来的预览图。
+// 浏览和预加载都必须走这里，否则又会在 cache\previews 里默默攒 JPEG。
+function needsConvertedPreview(item) {
+  return (
+    Boolean(item) &&
+    item.type === 'image' &&
+    !BROWSER_NATIVE_IMAGE_EXTENSIONS.has(item.extension)
+  );
+}
 
-    if (item && item.type === 'image' && item.previewUrl) {
-      const image = new Image();
-      image.src = item.previewUrl;
+function isHeifImage(item) {
+  return (
+    Boolean(item) &&
+    item.type === 'image' &&
+    TRIAL_SOURCE_IMAGE_EXTENSIONS.has(String(item.extension || '').toUpperCase())
+  );
+}
+
+function imageSourceVerdictKey(extension) {
+  return `${IMAGE_SOURCE_VERDICT_PREFIX}${String(extension || '').toUpperCase()}`;
+}
+
+// 这个会话里已经证实"本浏览器的 <img> 能直接显示 HEIC 原图"
+function imageSourceProven(item) {
+  try {
+    return (
+      window.sessionStorage.getItem(imageSourceVerdictKey(item.extension)) === '1'
+    );
+  } catch {
+    return false;
+  }
+}
+
+function rememberImageSourceWorks(item) {
+  try {
+    window.sessionStorage.setItem(imageSourceVerdictKey(item.extension), '1');
+  } catch {
+    // 隐私模式写不了：那就每次都试一次源文件，代价只是一次本地请求
+  }
+}
+
+// 清掉"这个浏览器能直出 HEIC"的会话结论（顶栏"直出"关掉再打开时用 = 重新试一遍）
+function clearImageSourceVerdicts() {
+  try {
+    const keys = [];
+
+    for (let index = 0; index < window.sessionStorage.length; index += 1) {
+      const key = window.sessionStorage.key(index);
+
+      if (key && key.startsWith(IMAGE_SOURCE_VERDICT_PREFIX)) {
+        keys.push(key);
+      }
     }
+
+    for (const key of keys) {
+      window.sessionStorage.removeItem(key);
+    }
+  } catch {
+    // 隐私模式清不了：不影响功能
+  }
+}
+
+// 这一次显示是"拿源文件在试"吗（HEIC/HEIF 且本会话还没证实过、而且"直出"是开着的）。
+// 只用来决定提示文案 —— 试失败不记负面结论：一张坏图不该让整个会话放弃试原图，
+// 而试错一次的代价只是"一次本地请求"。
+function isImageSourceTrial(item) {
+  return directFirst && isHeifImage(item) && !imageSourceProven(item);
+}
+
+function viewerImageUrl(item) {
+  if (!item || item.type !== 'image') {
+    return null;
+  }
+
+  if (isHeifImage(item)) {
+    // 关掉"直出"就老老实实转换；开着就源文件优先（本会话证实过能显示，或还在试）
+    if (!directFirst) {
+      return item.previewUrl || item.fileUrl || null;
+    }
+
+    return item.fileUrl || item.previewUrl || null;
+  }
+
+  if (needsConvertedPreview(item)) {
+    return item.previewUrl || item.fileUrl;
+  }
+
+  return item.fileUrl || item.previewUrl || null;
+}
+
+// 详情面板的"显示来源"：优先说**这次实际显示的**是什么，没显示过就按"会给哪个地址"预测。
+function imageSourceLabelFor(item) {
+  const shown = imageDisplaySources.get(item?.id);
+  const fromSource =
+    shown === 'source' ||
+    (shown !== 'preview' && Boolean(item?.fileUrl) && viewerImageUrl(item) === item.fileUrl);
+
+  return fromSource
+    ? '源文件（未经转换）'
+    : '转换预览（浏览器解不了这个格式）';
+}
+
+// 预加载邻居：只预热"这次真的会显示的那份源文件"。
+//
+// 需要转换的格式（TIFF 等）**故意不预热**：预热就等于"翻页时顺手把邻居也转一遍"，
+// 白花 CPU、白占盘 —— 用户要的是"真正打开那一张的时候才转"。
+// HEIC/HEIF 例外：一旦这个会话证实了浏览器能直接显示原图，邻居预热的就是源文件本体，
+// 不产生任何转换；还没证实时不预热（免得白读一遍 HEIC 最后还得转换）。
+// 已经打开过的那些不受影响：/api/preview 的响应带 immutable 缓存，翻回来照样秒开。
+//
+// 太大的原图也不预热（几十 MB 的图预热一下比打开还贵），反正有转圈提示兜着。
+const PRELOAD_MAX_BYTES = 8 * 1024 * 1024;
+const preloadedNeighborImages = [];
+
+function preloadNeighbors() {
+  preloadedNeighborImages.length = 0;
+
+  for (const item of [viewerPrevItem, viewerNextItem]) {
+    const heifWillShowSource =
+      directFirst && isHeifImage(item) && imageSourceProven(item);
+
+    if (needsConvertedPreview(item) && !heifWillShowSource) {
+      continue;
+    }
+
+    const url = viewerImageUrl(item);
+
+    if (!url) {
+      continue;
+    }
+
+    if (Number(item.size) > PRELOAD_MAX_BYTES) {
+      continue;
+    }
+
+    const image = new Image();
+    image.decoding = 'async';
+    image.src = url;
+    // 留住引用，别让浏览器把刚预热的解码结果回收掉
+    preloadedNeighborImages.push(image);
   }
 }
 
@@ -1305,7 +1838,19 @@ function showViewerError(message) {
 }
 
 function renderImageInViewer(item, renderToken) {
-  showSpinner('正在加载照片…');
+  // 需要转换的格式只在打开这一张时才转，所以这里把话说清楚；
+  // HEIC/HEIF 是先拿源文件试（浏览器装了系统解码器就能直接显示原图）。
+  // 提示按"这次到底会给哪个地址"来写，之前转过的会命中磁盘缓存 + 浏览器
+  // immutable 缓存，通常一闪而过。
+  const willShowSource = viewerImageUrl(item) === item.fileUrl;
+
+  showSpinner(
+    willShowSource
+      ? isImageSourceTrial(item)
+        ? '正在试原图…（浏览器解不了这个格式的话会自动转一次）'
+        : '正在加载照片…'
+      : '正在转换这张照片…（浏览器解不了这个格式，需要转一次）'
+  );
   resetZoom();
 
   const image = document.createElement('img');
@@ -1313,13 +1858,27 @@ function renderImageInViewer(item, renderToken) {
   image.alt = item.name;
   image.draggable = false;
   let usedFallback = false;
-  let allowPreviewFallback = BROWSER_NATIVE_IMAGE_EXTENSIONS.has(
-    item.extension
-  );
+  // 这次给的是不是源文件本体（HEIC 试原图、原生格式都是；退回预览/缩略图就不是）
+  let showingSource = willShowSource;
+  // 原生格式先试源文件；HEIC/HEIF 同理（浏览器可能装了系统解码器，能直接显示）。
+  // 万一这个"jpg"其实是别的格式（或 CMYK/超大图）、或者 HEIC 这台机器显示不了，
+  // 才退到服务端转出来的预览图 —— 这是唯一会生成预览的路径。
+  // 注意：已经在显示预览图时不重复退（否则会拿同一个地址再试一次）。
+  let allowPreviewFallback =
+    willShowSource &&
+    (BROWSER_NATIVE_IMAGE_EXTENSIONS.has(item.extension) || isHeifImage(item));
 
   image.addEventListener('load', () => {
     if (renderToken !== viewerRenderToken) {
       return;
+    }
+
+    // 记下"这次显示的到底是什么"（详情面板要说实话），
+    // 顺便把"本浏览器能直接显示 HEIC 原图"记进会话，后面所有 HEIC 都不用再试。
+    imageDisplaySources.set(item.id, showingSource ? 'source' : 'preview');
+
+    if (showingSource && isHeifImage(item)) {
+      rememberImageSourceWorks(item);
     }
 
     hideSpinner();
@@ -1334,13 +1893,21 @@ function renderImageInViewer(item, renderToken) {
 
     if (allowPreviewFallback && item.previewUrl) {
       allowPreviewFallback = false;
-      showSpinner('正在加载预览图…');
+      showingSource = false;
+      // 现在就记下"这次显示的是转换图"（详情面板不用等它加载完才说实话）
+      imageDisplaySources.set(item.id, 'preview');
+      showSpinner(
+        isHeifImage(item)
+          ? '这台机器显示不了 HEIC 原图，正在转换…（转一次之后就能看）'
+          : '正在加载预览图…'
+      );
       image.src = item.previewUrl;
       return;
     }
 
     if (!usedFallback && item.thumbUrl) {
       usedFallback = true;
+      showingSource = false;
       showSpinner('正在加载缩略图…');
       image.src = item.thumbUrl;
       return;
@@ -1349,29 +1916,333 @@ function renderImageInViewer(item, renderToken) {
     showViewerError('这张图片暂时无法显示');
   });
 
-  image.src = BROWSER_NATIVE_IMAGE_EXTENSIONS.has(item.extension)
-    ? item.fileUrl
-    : (item.previewUrl || item.fileUrl);
+  image.src = viewerImageUrl(item);
   viewerMedia.append(image);
   applyTransform();
 }
 
+// ---------------------------------------------------------------------------
+// 视频播放方式：HEVC 优先直出，失败再转（三层：预判 / 记忆 / 隐藏）
+//
+//   1. 预判：给 <video> 设源之前先问浏览器能不能解这个编码（canPlayType 在 Chromium 里
+//      就是去问平台解码器，装了 HEVC 扩展就返回 probably），说不行就直接走转码，一次都不试。
+//   2. 记忆：按"编码 + 容器"记住预判结论（本会话；每次启动重问，用户中途装了解码器也能生效），
+//      再按"文件"记住实际失败过的那些（localStorage，下次直接走转码，不再试）。
+//   3. 隐藏：直出失败/超时时不露黑屏 —— 转圈提示一直盖着，静默换成转码地址重来。
+//
+// 服务端不用改：fileUrl 就是源文件，videoUrl 是需要时会转码的那一份。
+// ---------------------------------------------------------------------------
+const DIRECT_VIDEO_CODECS = new Set(['h264', 'avc1', 'vp8', 'vp9', 'av01', 'av1']);
+// 这些编码浏览器自己不带解码器，全靠系统（HEVC 扩展 / 硬件解码），所以要预判
+const PROBED_VIDEO_CODECS = new Set(['hevc', 'hvc1', 'hev1', 'h265']);
+const DIRECT_VIDEO_FAILURES_KEY = 'album-direct-video-failures-v1';
+// 预判结论直接存在 sessionStorage 里，一个"编码|容器"一个键：
+// 每个标签页一份、刷新/重开页面就重新问（用户中途装 HEVC 扩展，下次打开就生效），
+// 也方便排查"这台机器到底能不能解"（Application → Session Storage 里一眼就能看）。
+const VIDEO_PROBE_KEY_PREFIX = 'album-video-probe-v1:';
+const DIRECT_ATTEMPT_TIMEOUT_MS = 5000;
+// 悬停预览是"顺手看一眼"的东西：等满 5 秒才换转码，比不预览还难受，所以给它更短的兜底
+const HOVER_DIRECT_TIMEOUT_MS = 2500;
+// "直出"总开关（图片 + 视频）：一个设置管两件事
+//   开：图片（HEIC/HEIF）先试原图、视频（HEVC 等）先试播源文件，试不动自动转换/转码
+//   关：图片一律转换、视频一律转码（回到"稳"的老行为）
+// 老版本的键是 album-direct-video-first（那时只管视频），读的时候兼容一下。
+const directSettingKey = 'album-direct-source-first';
+const legacyDirectSettingKey = 'album-direct-video-first';
+
+// 默认开：装了 HEVC/HEIF 解码器的机器就能省掉转换和转码
+let directFirst = true;
+let directVideoFailures = loadDirectVideoFailures();
+const videoPlaybackModes = new Map();
+
+// 预判结论只有两档，**没有"肯定不行"这一档**：
+//   'yes'    canPlayType 明确说 probably/maybe → 直接给源文件
+//   'unsure' 答不上来（空串）。Chromium 对 `video/quicktime; codecs="hevc"` 这种问法
+//            经常就回空串 —— 它的意思是"我不保证"，不是"肯定播不了"，所以照样先试一次。
+// 存的时候：能 = '1'，不确定 = '?'；老版本写的 '0' 一律当"不确定"
+// （那时候的 bug 正是把"答不上来"当成了"解不了"，于是永远不试）。
+const VIDEO_PROBE_YES = 'yes';
+const VIDEO_PROBE_UNSURE = 'unsure';
+
+function readVideoProbe(key) {
+  try {
+    const raw = window.sessionStorage.getItem(`${VIDEO_PROBE_KEY_PREFIX}${key}`);
+
+    if (raw === null) {
+      return null;
+    }
+
+    return raw === '1' ? VIDEO_PROBE_YES : VIDEO_PROBE_UNSURE;
+  } catch {
+    return null;
+  }
+}
+
+function writeVideoProbe(key, verdict) {
+  try {
+    window.sessionStorage.setItem(
+      `${VIDEO_PROBE_KEY_PREFIX}${key}`,
+      verdict === VIDEO_PROBE_YES ? '1' : '?'
+    );
+  } catch {
+    // 隐私模式下写不了，就每次都重新问（代价是一次 canPlayType，几乎为零）
+  }
+}
+
+function loadDirectVideoFailures() {
+  try {
+    const raw = window.localStorage.getItem(DIRECT_VIDEO_FAILURES_KEY);
+    const parsed = raw ? JSON.parse(raw) : null;
+    return new Set(Array.isArray(parsed) ? parsed : []);
+  } catch {
+    return new Set();
+  }
+}
+
+function saveDirectVideoFailures() {
+  try {
+    // 只留最近 500 条，够用又不会把 localStorage 撑爆
+    const values = [...directVideoFailures].slice(-500);
+    directVideoFailures = new Set(values);
+    window.localStorage.setItem(
+      DIRECT_VIDEO_FAILURES_KEY,
+      JSON.stringify(values)
+    );
+  } catch {
+    // 隐私模式下写不了，就只对本会话生效
+  }
+}
+
+function loadDirectSetting() {
+  try {
+    const raw =
+      window.localStorage.getItem(directSettingKey) ??
+      window.localStorage.getItem(legacyDirectSettingKey);
+
+    directFirst = raw === null ? true : raw === '1';
+  } catch {
+    directFirst = true;
+  }
+
+  return directFirst;
+}
+
+function setDirectFirst(enabled) {
+  directFirst = Boolean(enabled);
+
+  try {
+    window.localStorage.setItem(directSettingKey, directFirst ? '1' : '0');
+  } catch {
+    // 隐私模式：只对当前页面生效
+  }
+
+  syncDirectButton();
+}
+
+function videoCodecOf(item) {
+  return String(item?.videoCodec || '').trim().toLowerCase();
+}
+
+// 第一层：预判这台机器能不能解这个编码（结果按"编码+容器"缓存到本次会话）
+function probeVideoCodec(item) {
+  const codec = videoCodecOf(item);
+
+  if (!codec) {
+    return VIDEO_PROBE_UNSURE;
+  }
+
+  const extension = String(item.extension || '').toUpperCase();
+  const key = `${codec}|${extension}`;
+  const cached = readVideoProbe(key);
+
+  if (cached !== null) {
+    return cached;
+  }
+
+  const container = extension === 'MOV' ? 'video/quicktime' : 'video/mp4';
+  let verdict = VIDEO_PROBE_UNSURE;
+
+  try {
+    const probe = document.createElement('video');
+    const answer = probe.canPlayType(`${container}; codecs="${codec}"`);
+
+    // probably / maybe 才算"说了能解"；空串是"答不上来"，也算不确定
+    if (answer === 'probably' || answer === 'maybe') {
+      verdict = VIDEO_PROBE_YES;
+    }
+  } catch {
+    verdict = VIDEO_PROBE_UNSURE;
+  }
+
+  writeVideoProbe(key, verdict);
+  return verdict;
+}
+
+// 综合第一、二层：这个视频这次该怎么播
+function videoPlaybackPlan(item) {
+  const url = item?.fileUrl || null;
+  const transcodeUrl = item?.videoUrl || item?.fileUrl || null;
+  const codec = videoCodecOf(item);
+
+  if (!directFirst) {
+    return { mode: 'transcode', url: transcodeUrl, reason: 'setting' };
+  }
+
+  if (directVideoFailures.has(item?.id)) {
+    return { mode: 'transcode', url: transcodeUrl, reason: 'remembered' };
+  }
+
+  if (DIRECT_VIDEO_CODECS.has(codec)) {
+    // 浏览器本来就带解码器：服务端也不会转码，直接源文件
+    return { mode: 'direct', url, reason: 'native-codec' };
+  }
+
+  if (PROBED_VIDEO_CODECS.has(codec)) {
+    // 预判只是"快速路径"：说能解就直接给源文件；**答不上来也照样先试一次**
+    // （Chromium 对 quicktime + 裸 hevc 这种问法经常答不上来，而它其实能播）。
+    // 试不动的话由第三层兜住：报错/超时就静默换转码，并把这个文件记下来。
+    return {
+      mode: 'direct',
+      url,
+      reason:
+        probeVideoCodec(item) === VIDEO_PROBE_YES ? 'probe-ok' : 'probe-unsure',
+    };
+  }
+
+  // 明确不值得试的（mpeg4 / prores / 编码未知）：直接转码
+  return { mode: 'transcode', url: transcodeUrl, reason: 'unsupported-codec' };
+}
+
+function clearDirectVideoFailures() {
+  directVideoFailures = new Set();
+  saveDirectVideoFailures();
+}
+
+function rememberDirectVideoFailure(item) {
+  if (!item?.id || directVideoFailures.has(item.id)) {
+    return;
+  }
+
+  directVideoFailures.add(item.id);
+  saveDirectVideoFailures();
+}
+
+// 详情面板用的人话：这次播的是源文件还是转码副本
+function videoModeLabel(item) {
+  const mode = videoPlaybackModes.get(item.id) || videoPlaybackPlan(item).mode;
+
+  return mode === 'direct'
+    ? '源文件直出（未经转码）'
+    : '转码副本（H.264）';
+}
+
+// 悬停说明里写清"这台机器到底行不行"：视频看预判结论、图片看有没有试出来能直出
+function directVerdictLines() {
+  const videoProbe =
+    readVideoProbe('hevc|MOV') ?? readVideoProbe('hevc|MP4') ?? null;
+  const heicProven = imageSourceProven({ type: 'image', extension: 'HEIC' });
+
+  return [
+    videoProbe === null
+      ? '· 视频（HEVC）：还没试过'
+      : videoProbe === VIDEO_PROBE_YES
+        ? '· 视频（HEVC）：预判说能解 → 直接播源文件'
+        : '· 视频（HEVC）：预判答不上来（仍会真试一次，试不动才转码）',
+    heicProven
+      ? '· HEIC 原图：这个浏览器能直出'
+      : '· HEIC 原图：还没试出来（打开一张 HEIC 就知道；显示不了会自动转换）',
+  ];
+}
+
+function syncDirectButton() {
+  if (!directButton) {
+    return;
+  }
+
+  directButton.classList.toggle('is-active', directFirst);
+  directButton.setAttribute('aria-pressed', directFirst ? 'true' : 'false');
+  directButton.title = [
+    directFirst
+      ? '直出：开 —— 图片和视频都先试原图，试不动自动转换 / 转码'
+      : '直出：关 —— 图片一律转换、视频一律转码',
+    ...directVerdictLines(),
+    directFirst
+      ? '点一下 = 关掉直出，并重置"试过"的记忆'
+      : '点一下 = 打开直出（图片和视频都重新试一遍）',
+  ].join('\n');
+}
+
 function renderVideoInViewer(item, renderToken) {
-  showSpinner('正在准备视频，首次播放可能需要十几秒…');
+  const plan = videoPlaybackPlan(item);
+
+  showSpinner(
+    plan.mode === 'direct'
+      ? plan.reason === 'probe-unsure'
+        ? '正在试播源文件…（这台机器解不解得了还不确定，不行会自动换转码版本）'
+        : '正在打开视频…'
+      : '正在准备视频，首次播放可能需要十几秒…'
+  );
   resetZoom();
 
+  playVideoSource(item, plan, renderToken, {
+    allowFallback: plan.mode === 'direct',
+  });
+}
+
+// 第三层：出错/超时都走这里，悄悄换成转码地址，中途一直有转圈提示盖着，不露黑屏。
+function playVideoSource(item, plan, renderToken, { allowFallback }) {
   const video = document.createElement('video');
   video.className = 'viewer-video';
   video.controls = true;
   video.playsInline = true;
   video.autoplay = true;
   video.preload = 'auto';
+  video.dataset.source = plan.mode;
   video.setAttribute('aria-label', item.name);
 
+  let settled = false;
+  let fallbackTimer = null;
+
   const finishLoading = () => {
+    if (settled) {
+      return;
+    }
+
+    settled = true;
+
+    if (fallbackTimer) {
+      clearTimeout(fallbackTimer);
+      fallbackTimer = null;
+    }
+
     if (renderToken === viewerRenderToken) {
+      videoPlaybackModes.set(item.id, plan.mode);
       hideSpinner();
     }
+  };
+
+  const fallbackToTranscode = () => {
+    if (settled || renderToken !== viewerRenderToken) {
+      return;
+    }
+
+    settled = true;
+
+    if (fallbackTimer) {
+      clearTimeout(fallbackTimer);
+      fallbackTimer = null;
+    }
+
+    stopVideo();
+    // 失败的那个 <video> 还留在 DOM 里（stopVideo 只清 src），先撤干净再放新的
+    viewerMedia.replaceChildren();
+    showSpinner('这个视频的原始编码浏览器解不了，正在准备转码版本…');
+    playVideoSource(
+      item,
+      { mode: 'transcode', url: item.videoUrl || item.fileUrl, reason: 'fallback' },
+      renderToken,
+      { allowFallback: false }
+    );
   };
 
   video.addEventListener('loadeddata', finishLoading, { once: true });
@@ -1381,11 +2252,27 @@ function renderVideoInViewer(item, renderToken) {
       return;
     }
 
+    if (allowFallback) {
+      // 第二层：这个文件直出不行，记住，下次直接转码
+      rememberDirectVideoFailure(item);
+      fallbackToTranscode();
+      return;
+    }
+
     stopVideo();
     showViewerError('这个视频暂时无法在应用内播放');
   });
 
-  video.src = item.videoUrl || item.fileUrl;
+  if (allowFallback) {
+    // 既不报错也不出画面（比如卡在那儿）也要兜住
+    fallbackTimer = window.setTimeout(() => {
+      fallbackTimer = null;
+      rememberDirectVideoFailure(item);
+      fallbackToTranscode();
+    }, DIRECT_ATTEMPT_TIMEOUT_MS);
+  }
+
+  video.src = plan.url;
   viewerMedia.append(video);
   videoElement = video;
 
@@ -1412,11 +2299,12 @@ function renderViewerItem() {
   const renderToken = ++viewerRenderToken;
 
   stopVideo();
+  stopLiveVideo();
   viewerMedia.replaceChildren();
   viewerMedia.classList.remove('is-dragging');
   viewerZoom.hidden = true;
 
-  viewerCounter.textContent = `${currentIndex + 1} / ${items.length}`;
+  updateViewerNavigation();
   viewerFilename.textContent = item.name;
   viewerOpenOriginal.textContent =
     item.type === 'video' ? 'PotPlayer' : '原图';
@@ -1425,24 +2313,35 @@ function renderViewerItem() {
       ? '用 PotPlayer 打开原视频'
       : '用系统照片打开原图';
 
+  // 实况照片多一个"实况"按钮：在静止图上叠放同名 MOV。
+  const live = isLivePhoto(item);
+  viewerLive.hidden = !live;
+
+  if (live) {
+    const duration = item.liveVideoDuration
+      ? ` · ${formatDuration(item.liveVideoDuration)}`
+      : '';
+    viewerLive.title = `播放实况视频：${item.liveVideoName || ''}${duration}（L）`;
+  }
+
   const dateText = formatViewerDate(item.takenAt);
-  viewerDate.textContent =
-    item.type === 'video' && item.duration
+  viewerDate.textContent = live
+    ? `${dateText} · 实况照片${item.liveVideoDuration ? ` · ${formatDuration(item.liveVideoDuration)}` : ''}`
+    : item.type === 'video' && item.duration
       ? `${dateText} · ${formatDuration(item.duration)}`
       : dateText;
-
-  viewerPrev.disabled = currentIndex === 0;
-  viewerNext.disabled = currentIndex === items.length - 1;
-  viewerPrev.hidden = items.length < 2;
-  viewerNext.hidden = items.length < 2;
 
   if (item.type === 'video') {
     viewerHintDesktop.textContent = '← → 切换 · Esc 关闭';
     viewerHintTouch.textContent = '左右滑动切换';
     renderVideoInViewer(item, renderToken);
   } else {
-    viewerHintDesktop.textContent = '滚轮缩放 · 双击放大 · ← → 切换 · Esc 关闭';
-    viewerHintTouch.textContent = '双击放大 · 左右滑动切换';
+    viewerHintDesktop.textContent = live
+      ? '滚轮缩放 · L 播放实况 · ← → 切换 · Esc 关闭'
+      : '滚轮缩放 · 双击放大 · ← → 切换 · Esc 关闭';
+    viewerHintTouch.textContent = live
+      ? '双击放大 · 点"实况"播放 · 左右滑动切换'
+      : '双击放大 · 左右滑动切换';
     renderImageInViewer(item, renderToken);
   }
 
@@ -1482,25 +2381,44 @@ function createDetailSection(title, rows) {
 
 function renderDetails(item) {
   const isVideo = item.type === 'video';
+  const isLive = isLivePhoto(item);
+  // 用户最关心"我现在看到的是不是原图"：图片说清是源文件还是转换预览，
+  // 视频说清是源文件还是转码副本（needsTranscode 会被 toPublicItem 剔掉，
+  // 所以这里用"扩展名 + 是否原生支持"来给一句人话）。
+  const imageSourceLabel = imageSourceLabelFor(item);
   const sections = [
     createDetailSection('文件', [
       ['文件名', item.name],
       ['格式', `${item.extension} · ${item.mime}`],
       ['大小', formatBytes(item.size)],
       ['分辨率', item.width && item.height ? `${item.width} × ${item.height}` : '未读取到'],
+      ...(isVideo ? [] : [['显示来源', imageSourceLabel]]),
+      ...(isLive
+        ? [['类型', item.liveVideoDuration
+            ? `实况照片 · 视频 ${formatDuration(item.liveVideoDuration)}`
+            : '实况照片']]
+        : []),
       ...(isVideo
         ? [
             ['时长', item.duration ? formatDuration(item.duration) : '未读取到'],
             ['视频编码', formatCodec(item.videoCodec)],
+            ['播放方式', videoModeLabel(item)],
           ]
         : []),
     ]),
+    isLive
+      ? createDetailSection('实况', [
+          ['伴随视频', item.liveVideoName || '同名 MOV'],
+          ['视频大小', item.liveVideoSize ? formatBytes(item.liveVideoSize) : null],
+          ['视频时长', item.liveVideoDuration ? formatDuration(item.liveVideoDuration) : null],
+        ])
+      : null,
     createDetailSection('时间', [
       ['拍摄时间', formatDetailDate(item.takenAt)],
       ['修改时间', formatDetailDate(item.modifiedAt)],
       ['时间来源', formatDateSource(item.dateSource)],
     ]),
-  ];
+  ].filter(Boolean);
 
   if (item.device || item.lens) {
     sections.push(
@@ -1526,7 +2444,9 @@ function renderDetails(item) {
     );
   }
 
-  detailsSubtitle.textContent = `${isVideo ? '视频' : '照片'} · ${item.extension}`;
+  detailsSubtitle.textContent = isLive
+    ? `实况照片 · ${item.extension}`
+    : `${isVideo ? '视频' : '照片'} · ${item.extension}`;
   detailsContent.replaceChildren(...sections.filter(Boolean));
 }
 
@@ -1548,6 +2468,11 @@ function openDetails() {
     videoElement.pause();
   } else {
     videoWasPlayingBeforeDetails = false;
+  }
+
+  // 实况视频同理：打开详情时先停下，关闭详情不自动续播（用户按"实况"再来）。
+  if (liveVideoElement && !liveVideoElement.paused) {
+    liveVideoElement.pause();
   }
 
   const focusClose = viewerDetailsButton.matches(':focus-visible');
@@ -1584,10 +2509,69 @@ function closeDetails({ restoreFocus = true, resumeVideo = true } = {}) {
   }
 }
 
-function openViewer(itemId) {
-  const index = items.findIndex((item) => item.id === itemId);
+// 查看器导航：优先用服务端算出的邻居（覆盖整个图库），
+// 退化到"当前已加载的条目"里的相邻项。
+function viewerStep(direction) {
+  const neighbor = direction > 0 ? viewerNextItem : viewerPrevItem;
 
-  if (index < 0) {
+  if (neighbor) {
+    return neighbor;
+  }
+
+  return items[currentIndex + direction] || null;
+}
+
+function updateViewerNavigation() {
+  const index = viewerPosition.index >= 0 ? viewerPosition.index : currentIndex;
+  const total = viewerPosition.total || items.length;
+
+  viewerCounter.textContent = total > 0 ? `${Math.max(1, index + 1)} / ${total}` : '';
+
+  const canGoPrevious =
+    Boolean(viewerPrevItem) || (currentIndex > 0 && currentIndex < items.length);
+  const canGoNext =
+    Boolean(viewerNextItem) ||
+    (currentIndex >= 0 && currentIndex < items.length - 1);
+
+  viewerPrev.disabled = !canGoPrevious;
+  viewerNext.disabled = !canGoNext;
+  viewerPrev.hidden = !canGoPrevious && !canGoNext;
+  viewerNext.hidden = !canGoPrevious && !canGoNext;
+}
+
+async function loadViewerNeighbors(itemId) {
+  try {
+    const data = await fetchJson(
+      `/api/library/neighbors/${encodeURIComponent(
+        itemId
+      )}?folder=${encodeURIComponent(activeFolder)}`
+    );
+
+    if (!viewerItem || viewerItem.id !== itemId) {
+      return;
+    }
+
+    viewerPrevItem = data?.previous || null;
+    viewerNextItem = data?.next || null;
+    viewerPosition = {
+      index: typeof data?.index === 'number' ? data.index : -1,
+      total: Number(data?.total) || 0,
+    };
+
+    updateViewerNavigation();
+    preloadNeighbors();
+  } catch {
+    // 扫描还没完成时拿不到邻居，保持单张浏览即可。
+  }
+}
+
+function openViewer(itemId) {
+  const item =
+    stream.getLoadedItem(itemId) ||
+    items.find((entry) => entry.id === itemId) ||
+    null;
+
+  if (!item) {
     return;
   }
 
@@ -1597,7 +2581,12 @@ function openViewer(itemId) {
       : null;
   const shouldFocusClose =
     lastFocusedElement?.matches?.(':focus-visible') || false;
-  currentIndex = index;
+
+  viewerItem = item;
+  viewerPrevItem = null;
+  viewerNextItem = null;
+  viewerPosition = { index: -1, total: 0 };
+  currentIndex = items.indexOf(item);
 
   viewer.classList.add('is-open');
   viewer.setAttribute('aria-hidden', 'false');
@@ -1611,6 +2600,8 @@ function openViewer(itemId) {
       viewer.focus({ preventScroll: true });
     }
   }, 40);
+
+  loadViewerNeighbors(item.id);
 }
 
 function closeViewer() {
@@ -1620,6 +2611,7 @@ function closeViewer() {
 
   closeDetails({ restoreFocus: false, resumeVideo: false });
   stopVideo();
+  stopLiveVideo();
   viewerRenderToken += 1;
   viewer.classList.remove('is-open');
   viewer.setAttribute('aria-hidden', 'true');
@@ -1627,6 +2619,10 @@ function closeViewer() {
   viewerMedia.replaceChildren();
   viewerSpinner.hidden = true;
   currentIndex = -1;
+  viewerItem = null;
+  viewerPrevItem = null;
+  viewerNextItem = null;
+  viewerPosition = { index: -1, total: 0 };
   gesture = null;
 
   if (lastFocusedElement && document.contains(lastFocusedElement)) {
@@ -1641,14 +2637,23 @@ function navigateViewer(direction) {
     return;
   }
 
-  const nextIndex = currentIndex + direction;
+  const target = viewerStep(direction);
 
-  if (nextIndex < 0 || nextIndex >= items.length) {
+  if (!target) {
     return;
   }
 
-  currentIndex = nextIndex;
+  viewerItem = target;
+  viewerPrevItem = null;
+  viewerNextItem = null;
+  viewerPosition = {
+    index: viewerPosition.index >= 0 ? viewerPosition.index + direction : -1,
+    total: viewerPosition.total,
+  };
+  currentIndex = items.indexOf(target);
+
   renderViewerItem();
+  loadViewerNeighbors(target.id);
 }
 
 function trapViewerFocus(event) {
@@ -1693,6 +2698,7 @@ viewerOpenOriginal.addEventListener('click', () => {
   }
 });
 viewerZoom.addEventListener('click', () => resetZoom({ animate: true }));
+viewerLive.addEventListener('click', () => playLivePhoto());
 viewerDetailsButton.addEventListener('click', () => {
   if (detailsOpen) {
     closeDetails();
@@ -1891,6 +2897,9 @@ document.addEventListener('keydown', (event) => {
   } else if (event.key === '0') {
     event.preventDefault();
     resetZoom({ animate: true });
+  } else if (event.key === 'l' || event.key === 'L') {
+    event.preventDefault();
+    playLivePhoto();
   } else if (event.key === 'Tab') {
     trapViewerFocus(event);
   }
@@ -1905,48 +2914,58 @@ window.addEventListener('resize', () => {
   applyTransform();
 });
 
-function setScanning(isScanning, message = '正在扫描照片文件夹…') {
-  scanText.textContent = message;
-  scanOverlay.hidden = !isScanning;
+// 扫描提示现在贴在内容区顶部（不再是全屏遮罩）：
+// 扫描中可以"停止加载"，停止后可以"继续加载"。
+let overlayMode = 'cancel';
 
+function updateScanProgress() {
+  const total = streamState?.total || 0;
+  const filled = streamState?.filled || 0;
+  const percent = total > 0 ? Math.min(100, Math.round((filled / total) * 100)) : 0;
+
+  scanFill.style.width = `${percent}%`;
+}
+
+function setOverlay(mode, message) {
+  overlayMode = mode;
+  scanText.textContent = message;
+  scanBar.hidden = false;
+  scanCancelButton.disabled = false;
+  scanCancelButton.textContent = mode === 'resume' ? '继续加载' : '停止加载';
+  updateScanProgress();
+}
+
+function setScanning(isScanning, message = '正在扫描照片文件夹…') {
   if (isScanning) {
-    scanCancelButton.disabled = false;
-    scanCancelButton.textContent = '停止加载';
+    setOverlay('cancel', message);
+    return;
   }
+
+  scanBar.hidden = true;
 }
 
 function stopScanning() {
-  scanWasCanceled = true;
+  if (overlayMode === 'resume') {
+    scanBar.hidden = true;
+    loadLibrary({ force: true });
+    return;
+  }
+
   scanCancelButton.disabled = true;
   scanCancelButton.textContent = '正在停止…';
 
-  if (scanController) {
-    scanController.abort();
-  }
-
-  scanOverlay.hidden = true;
-
+  // 2.0：取消由服务端处理，已经扫描到的部分会保留下来继续可看。
   fetch('/api/scan/cancel', {
     method: 'POST',
     headers: { Accept: 'application/json' },
-  }).catch(() => {
-    // 前端已经停止等待，取消接口失败不影响界面恢复。
-  });
-}
-
-function renderStoppedState() {
-  const card = createStateCard({
-    icon: '<span aria-hidden="true">■</span>',
-    title: '已停止加载',
-    description:
-      '扫描已经停止，当前文件夹没有加载完成。<br>可以继续加载，或者换一个文件夹。',
-    buttonLabel: '继续加载',
-    onAction: () => loadLibrary({ force: true }),
-  });
-
-  gallery.replaceChildren(card);
-  gallery.dataset.state = 'ready';
-  gallery.setAttribute('aria-busy', 'false');
+  })
+    .then(() => {
+      showToast('已停止加载');
+    })
+    .catch(() => {
+      // 前端已经停止等待，取消接口失败不影响界面恢复。
+      scanBar.hidden = true;
+    });
 }
 
 function setChoosingFolder(isChoosing) {
@@ -2011,110 +3030,78 @@ async function chooseFolder() {
   }
 }
 
+// 从 ?photo=<id> 进来时，目标照片可能还没进入可视窗口；
+// 用按 id 取数的接口把它找出来，而不是把整个图库拉下来找。
+async function resolvePendingPhoto(id) {
+  try {
+    const data = await fetchJson(
+      `/api/library/items-by-ids?ids=${encodeURIComponent(id)}`
+    );
+    const item = data?.items?.[0];
+
+    if (!item) {
+      showToast('没有找到这张照片');
+      return;
+    }
+
+    stream.rememberItems([item]);
+    openViewer(item.id);
+  } catch {
+    showToast('没有找到这张照片');
+  }
+}
+
 async function loadLibrary({ force = false } = {}) {
   if (isLoading) {
-    return;
+    return false;
   }
 
   isLoading = true;
-  let loadSucceeded = false;
   const hadContent = gallery.dataset.state === 'ready';
-  scanWasCanceled = false;
-  scanController = new AbortController();
+
+  // 每轮加载都重新核对一次侧栏目录：刷新/换文件夹后必须重新拿一遍，
+  // 不能因为"revision 看起来没变"就跳过（见 syncFolderNavigation 里的说明）。
+  folderNavRevision = -1;
 
   refreshButton.disabled = true;
   refreshButton.classList.add('is-spinning');
-  gallery.setAttribute('aria-busy', 'true');
   syncCacheButton();
 
-  if (hadContent) {
-    // 刷新时保留旧图库，用户可以继续浏览和打开图片。
-    gallery.classList.add('is-refreshing');
-  } else {
-    setScanning(
-      true,
-      force ? '正在刷新照片文件夹…' : '正在扫描照片文件夹…'
-    );
-    renderSkeleton();
+  if (force && !hadContent) {
+    setOverlay('cancel', '正在刷新照片文件夹…');
   }
 
   try {
-    const response = await fetch(
-      force ? '/api/photos?refresh=1' : '/api/photos',
-      {
-        cache: 'no-store',
-        headers: { Accept: 'application/json' },
-        signal: scanController.signal,
-      }
-    );
-    const data = await response.json().catch(() => null);
-
-    if (!response.ok) {
-      throw new Error(data?.error || `HTTP ${response.status}`);
-    }
-
-    renderLibrary(data);
-    loadSucceeded = true;
+    await stream.start({ force });
 
     if (pendingPhotoId) {
-      const requestedItem = allItems.find(
-        (item) => item.id === pendingPhotoId
-      );
+      const id = pendingPhotoId;
       pendingPhotoId = null;
       window.history.replaceState({}, '', window.location.pathname);
 
-      if (requestedItem) {
-        if (!items.includes(requestedItem)) {
-          activeFolder = 'all';
-          items = filterItems('all');
-          updateFolderSelection();
-          renderGalleryItems();
-          updateSummary();
-        }
-
-        openViewer(requestedItem.id);
+      if (stream.getLoadedItem(id)) {
+        openViewer(id);
       } else {
-        showToast('没有找到这张照片');
+        await resolvePendingPhoto(id);
       }
     }
 
     if (force) {
       showToast('已重新扫描照片文件夹');
     }
+
+    return true;
   } catch (error) {
-    const wasAborted =
-      error.name === 'AbortError' || scanWasCanceled;
-
-    if (wasAborted) {
-      if (!hadContent) {
-        summary.textContent = '已停止加载';
-        renderStoppedState();
-      }
-
-      showToast('已停止加载');
-    } else {
-      console.error(error);
-
-      if (hadContent) {
-        showToast(error.message || '刷新失败，请稍后重试');
-      } else {
-        summary.textContent = '读取相册失败';
-        renderErrorState();
-      }
-    }
+    console.error(error);
+    summary.textContent = '读取相册失败';
+    showToast(error.message || '读取相册失败，请稍后重试');
+    return false;
   } finally {
     isLoading = false;
-    scanController = null;
-    scanWasCanceled = false;
-    gallery.classList.remove('is-refreshing');
-    gallery.setAttribute('aria-busy', 'false');
     refreshButton.disabled = false;
     refreshButton.classList.remove('is-spinning');
-    setScanning(false);
     syncCacheButton();
   }
-
-  return loadSucceeded;
 }
 
 refreshButton.addEventListener('click', () => {
@@ -2125,12 +3112,35 @@ chooseFolderButton.addEventListener('click', chooseFolder);
 topbarFolderButton.addEventListener('click', chooseFolder);
 scanCancelButton.addEventListener('click', stopScanning);
 clearCacheButton.addEventListener('click', openCacheConfirm);
+// "直出"总开关的初值要等上面的声明都执行完（let 有暂时死区）
+loadDirectSetting();
+syncDirectButton();
+directButton?.addEventListener('click', () => {
+  setDirectFirst(!directFirst);
+
+  if (directFirst) {
+    // 重新打开 = 重新试一遍：两类记忆都清掉
+    //   · 视频：按文件记的"直出失败过"（localStorage）
+    //   · 图片：本会话记的"这个浏览器能直出 HEIC"（sessionStorage）
+    // 用户中途装了 HEVC / HEIF 解码器时，这个手势就能让它立刻生效。
+    clearDirectVideoFailures();
+    clearImageSourceVerdicts();
+    showToast('直出已打开：图片和视频都先试原图（已重置试过的记忆）');
+  } else {
+    showToast('直出已关闭：图片一律转换、视频一律转码');
+  }
+});
 for (const button of openModeButtons) {
   button.addEventListener('click', () => {
     setOpenMode(button.dataset.openMode);
   });
 }
-cacheConfirmButton.addEventListener('click', clearCacheNow);
+for (const button of cacheOptionButtons) {
+  button.addEventListener('click', () => {
+    clearCacheNow(button.dataset.cacheKind || 'all');
+  });
+}
+
 cacheCancelButton.addEventListener('click', () => {
   if (!isClearingCache) {
     closeCacheConfirm();

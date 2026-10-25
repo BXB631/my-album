@@ -18,8 +18,8 @@ const SKIP_DIRS = new Set([
 const REQUIRED_FILES = [
   'package.json',
   'server.js',
-  'electron/main.js',
   'public/index.html',
+  'public/photo-stream.js',
   'lib/media.js',
   'assets/icon.ico',
 ];
@@ -54,7 +54,7 @@ function main() {
   JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
 
   const files = [];
-  for (const directory of ['electron', 'lib', 'public', 'tools']) {
+  for (const directory of ['lib', 'public', 'tools']) {
     const absolutePath = path.join(ROOT, directory);
 
     if (fs.existsSync(absolutePath)) {
