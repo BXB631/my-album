@@ -69,23 +69,7 @@ pnpm audit:live "E:\照片根目录" --verify 30
 升级说明：索引格式升到 v4。**老索引不用重扫** —— 读进来时会按文件名补一次配对
 （只读图片头部和 MOV 尾部各 256 KB，不起 ffmpeg 进程），补完就地写回 v4。
 
-## 运行方式
 
-2.0 是**纯网页版**：本机跑一个 Node 服务，用浏览器打开。不需要 Electron，也没有安装包。
-
-1. 装好 [Node.js](https://nodejs.org/) 20.8 或更高版本
-2. 在项目文件夹里双击 `start-web.bat`（自动找 Node、启动服务、打开浏览器）
-3. 浏览器地址是 `http://localhost:3000`
-4. 点“选择照片文件夹”，选你的照片目录
-
-也可以手动启动：
-
-```bash
-pnpm install --node-linker=hoisted
-pnpm start
-```
-
-服务跑在一个标题为 `My Album Server` 的控制台窗口里，**关掉它即停止相册**。
 
 数据保存在项目目录下：
 
