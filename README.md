@@ -15,9 +15,7 @@
   <a href="#源码运行">源码运行</a>
   ·
   <a href="docs/LOADING-2.0.md">流式加载设计</a>
-  ·
-  <a href="docs/PUBLISHING.md">发布到 GitHub</a>
-</p>
+  
 
 <p align="center">
   <img src="https://img.shields.io/badge/Windows-10%20%2F%2011-0078D4?logo=windows" alt="Windows 10/11">
